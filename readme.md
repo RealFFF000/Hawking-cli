@@ -16,6 +16,13 @@ A lightweight Bash utility to submit assignment files to Hawking, automatically 
 * **Visual Diffing:** Prints character-level differences in **red** on test failures while keeping character alignment clear.
 * **Debug Mode:** Allows dumping raw JSON responses directly to stdout.
 
+## Installation
+```bash
+git clone <this repo>
+cd hawking-cli
+./install.sh
+```
+
 ## Usage
 
 ### Basic Command Structure
