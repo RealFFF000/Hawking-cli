@@ -21,7 +21,7 @@ A lightweight Bash utility to submit assignment files to Hawking, automatically 
 ### Basic Command Structure
 
 ```bash
-hawking.sh [--debug] <module_id> [file_to_submit]
+hawking [--debug] <module_id> [file_to_submit]
 ```
 
 # Yes the whole thing was vibecoded
