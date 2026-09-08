@@ -279,26 +279,15 @@ decode_b64() {
     echo "$input" | base64 --decode 2>/dev/null || echo "$input" | base64 -D 2>/dev/null || echo ""
 }
 
-echo "$RESPONSE" | jq -r '
-  .tests as $tests |
-  .attempt.testResults[] |
-  .testId as $tid |
-  ($tests[$tid | tostring] // {}) as $tdef |
-  [
-    .testId,
-    (.correct | tostring),
-    (.execTimeMillis | tostring),
-    ($tdef.testStdout // ""),
-    (.stdout // ""),
-    (.stderr // "")
-  ] | @tsv
-' | while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT STDERR; do
-    
+ALL_PASSED=true
+
+while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT STDERR; do
     EXPECTED=$(decode_b64 "$EXPECTED_B64")
 
     if [ "$CORRECT" == "true" ]; then
         echo -e "${GREEN}${BOLD}✓ PASSED${RESET} — test ${TEST_ID} (${EXEC_TIME}ms)"
     else
+        ALL_PASSED=false
         echo -e "${RED}${BOLD}✗ FAILED${RESET} — test ${TEST_ID} (${EXEC_TIME}ms)"
         
         ACT_CLEAN=$(printf '%s' "$STDOUT" | tr -d '\r')
@@ -332,6 +321,27 @@ echo "$RESPONSE" | jq -r '
     fi
 
     [ -n "$STDERR" ] && echo -e "  ${RED}stderr:${RESET} ${STDERR}"
-done
+done < <(echo "$RESPONSE" | jq -r '
+  .tests as $tests |
+  .attempt.testResults[] |
+  .testId as $tid |
+  ($tests[$tid | tostring] // {}) as $tdef |
+  [
+    .testId,
+    (.correct | tostring),
+    (.execTimeMillis | tostring),
+    ($tdef.testStdout // ""),
+    (.stdout // ""),
+    (.stderr // "")
+  ] | @tsv
+')
+
+if [ "$ALL_PASSED" = true ]; then
+    echo ""
+    echo -e "${GREEN}${BOLD}🎉 All test cases passed successfully! Great job!${RESET}"
+    if [ $((RANDOM % 100)) -eq 0 ]; then
+        echo -e "${GREEN}${BOLD}Good boy${RESET}"
+    fi
+fi
 
 echo ""
