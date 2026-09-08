@@ -24,7 +24,7 @@ for arg in "$@"; do
 done
 
 if [ ${#ARGS[@]} -lt 1 ]; then
-    echo "Usage: $0 [--debug] <module_id> [file_to_submit]"
+    echo "Usage: $0 [--debug] <assignment_id> [file_to_submit]"
     exit 1
 fi
 
@@ -53,11 +53,20 @@ fi
 
 # ---- Cookie handling ----
 prompt_for_cookie() {
-    echo -e "${YELLOW}Enter a fresh Cookie header value (e.g. PHPSESSID=xxxxx):${RESET}"
-    read -r NEW_COOKIE
-    echo "$NEW_COOKIE" > "$COOKIE_FILE"
-    chmod 600 "$COOKIE_FILE"
-    echo -e "${GREEN}Saved to ${COOKIE_FILE}${RESET}"
+    echo -e "${YELLOW}Session missing or invalid. Triggering auto-login via hawking-login...${RESET}"
+    if command -v hawking-login &> /dev/null; then
+        hawking-login
+    elif [ -x "$HOME/.hawking/bin/hawking-login" ]; then
+        "$HOME/.hawking/bin/hawking-login"
+    else
+        echo -e "${RED}Error: hawking-login command not found in PATH or ~/.hawking/bin/.${RESET}"
+        exit 1
+    fi
+
+    if [ ! -f "$COOKIE_FILE" ]; then
+        echo -e "${RED}Failed to acquire valid session cookie.${RESET}"
+        exit 1
+    fi
 }
 
 if [ ! -f "$COOKIE_FILE" ]; then
@@ -66,37 +75,58 @@ fi
 
 # ---- Upload request ----
 URL="${BASE_URL}/${ASSIGNMENT_ID}/fileUpload"
+ASSIGNMENT_PAGE_URL="${BASE_URL}/${ASSIGNMENT_ID}"
 
 do_upload() {
-    COOKIE=$(cat "$COOKIE_FILE")
-    curl -s -w "\n%{http_code}" -X POST "$URL" \
-      -H "Cookie: $COOKIE" \
-      -H "X-Requested-With: XMLHttpRequest" \
-      -H "Referer: ${BASE_URL}/${ASSIGNMENT_ID}" \
-      -F "file=@${FILE}"
+    # 1. Visit assignment page to initialize Symfony route context & cookies
+    PAGE_HTML=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$ASSIGNMENT_PAGE_URL")
+    
+    # 2. Extract CSRF token if present
+    CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
+    if [ -z "$CSRF_TOKEN" ]; then
+        CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'data-csrf-token="[^"]*"' | sed -E 's/.*data-csrf-token="([^"]*)".*/\1/' || true)
+    fi
+
+    # 3. Execute multipart upload request
+    CURL_CMD=(curl -s -w "\n%{http_code}" -X POST "$URL"
+      -b "$COOKIE_FILE"
+      -c "$COOKIE_FILE"
+      -H "X-Requested-With: XMLHttpRequest"
+      -H "Referer: ${ASSIGNMENT_PAGE_URL}"
+      -H "Origin: https://hawking.computing.dcu.ie"
+      -H "Accept: application/json, text/javascript, */*; q=0.01"
+      -F "file=@${FILE}")
+
+    if [ -n "$CSRF_TOKEN" ]; then
+        CURL_CMD+=(-F "_csrf_token=${CSRF_TOKEN}")
+    fi
+
+    "${CURL_CMD[@]}"
 }
 
-echo -e "${YELLOW}Uploading ${FILE} to module ${ASSIGNMENT_ID}...${RESET}"
+echo -e "${YELLOW}Uploading ${FILE} to assignment ${ASSIGNMENT_ID}...${RESET}"
 
 RAW_RESPONSE=$(do_upload)
 HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
 RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
 
 # ---- Validate HTTP Status & Payload ----
-if [ "$HTTP_CODE" -eq 404 ]; then
-    echo -e "${RED}Assignment ID '${ASSIGNMENT_ID}' not found (HTTP 404). Check your module ID.${RESET}"
-    exit 1
-elif [ "$HTTP_CODE" -eq 401 ] || [ "$HTTP_CODE" -eq 403 ]; then
-    echo -e "${RED}Session expired or unauthorized (HTTP $HTTP_CODE).${RESET}"
+if [ "$HTTP_CODE" -eq 401 ] || [ "$HTTP_CODE" -eq 403 ] || [ "$HTTP_CODE" -eq 302 ] || [ "$HTTP_CODE" -eq 301 ]; then
+    echo -e "${RED}Session expired or unauthorized (HTTP $HTTP_CODE redirect).${RESET}"
     prompt_for_cookie
-    echo -e "${YELLOW}Retrying upload...${RESET}"
+    echo -e "${YELLOW}Retrying upload with fresh session...${RESET}"
     RAW_RESPONSE=$(do_upload)
     HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
     RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
 fi
 
+if [ "$HTTP_CODE" -eq 404 ]; then
+    echo -e "${RED}Assignment ID '${ASSIGNMENT_ID}' not found (HTTP 404). Check your assignment ID.${RESET}"
+    exit 1
+fi
+
 if [ "$HTTP_CODE" -ne 200 ] || ! echo "$RESPONSE" | jq -e '.attempt' >/dev/null 2>&1; then
-    echo -e "${RED}Failed to process request (HTTP $HTTP_CODE). Invalid module ID or payload.${RESET}"
+    echo -e "${RED}Failed to process request (HTTP $HTTP_CODE). Invalid assignment ID or payload.${RESET}"
     if [ "$DEBUG" = true ]; then
         echo -e "${BOLD}=== Raw Response (Debug) ===${RESET}"
         echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
