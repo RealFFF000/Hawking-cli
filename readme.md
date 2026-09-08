@@ -31,6 +31,13 @@ cd hawking-cli
 hawking [--debug] <module_id> [file_to_submit]
 ```
 
-# Yes the whole thing was vibecoded
+### Where can I find the module ID?
 
-No - expecting me to get my hands off my keyboard to drag a damn file is not sane
+It's the number at the very end of the URL - for example https://hawking.computing.dcu.ie/hawking/120 would have an ID of 120
+
+
+### Where can I find the cookie the script asks me for?
+
+https://hawking.computing.dcu.ie/hawking > right click > inspect > application > cookies > and you copy the value of PHPSESSID
+
+I may add the login support one day
