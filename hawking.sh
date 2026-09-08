@@ -4,6 +4,7 @@ set -euo pipefail
 
 BASE_URL="https://hawking.computing.dcu.ie/hawking"
 COOKIE_FILE="$HOME/.hawking_cookie"
+CACHE_FILE="$HOME/.hawking_history"
 SCRIPT_NAME="$(basename "$0")"
 
 GREEN="\033[0;32m"
@@ -12,27 +13,121 @@ YELLOW="\033[0;33m"
 BOLD="\033[1m"
 RESET="\033[0m"
 
-# ---- Parse options ----
+# ---- Parse Flags & Options ----
 DEBUG=false
+CLEAR_CACHE=false
+SHOW_MODULES=false
+ADD_MODULE_ID=""
 ARGS=()
-for arg in "$@"; do
-    if [ "$arg" == "--debug" ]; then
-        DEBUG=true
-    else
-        ARGS+=("$arg")
-    fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --debug)
+            DEBUG=true
+            shift
+            ;;
+        --clear-cache)
+            CLEAR_CACHE=true
+            shift
+            ;;
+        --modules)
+            SHOW_MODULES=true
+            shift
+            ;;
+        --add-module)
+            ADD_MODULE_ID="$2"
+            shift 2
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
 done
 
-if [ ${#ARGS[@]} -lt 1 ]; then
-    echo "Usage: $0 [--debug] <assignment_id> [file_to_submit]"
-    exit 1
+# ---- Handle --clear-cache ----
+if [ "$CLEAR_CACHE" = true ]; then
+    rm -f "$CACHE_FILE"
+    echo -e "${GREEN}Cache **cleared successfully**.${RESET}"
+    exit 0
 fi
 
-ASSIGNMENT_ID="${ARGS[0]}"
-FILE="${ARGS[1]:-}"
+# ---- Handle --modules ----
+if [ "$SHOW_MODULES" = true ]; then
+    if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
+        echo -e "${BOLD}Cached Module IDs:${RESET}"
+        awk '!seen[$0]++' "$CACHE_FILE" | while read -r mid; do
+            echo -e "  - ${GREEN}${mid}${RESET}"
+        done
+    else
+        echo -e "${YELLOW}No **cached module IDs** found.${RESET}"
+    fi
+    exit 0
+fi
+
+# ---- Handle --add-module ----
+if [ -n "$ADD_MODULE_ID" ]; then
+    if [[ ! "$ADD_MODULE_ID" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}Error: Module ID must be a **valid number**.${RESET}"
+        exit 1
+    fi
+    temp_file=$(mktemp)
+    echo "$ADD_MODULE_ID" > "$temp_file"
+    if [ -f "$CACHE_FILE" ]; then
+        grep -v "^${ADD_MODULE_ID}$" "$CACHE_FILE" >> "$temp_file" || true
+    fi
+    mv "$temp_file" "$CACHE_FILE"
+    echo -e "${GREEN}Successfully **added module ID** ${BOLD}${ADD_MODULE_ID}${RESET}${GREEN} to cache.${RESET}"
+    exit 0
+fi
+
+# ---- Load & Manage Cache ----
+get_cached_ids() {
+    if [ -f "$CACHE_FILE" ]; then
+        awk '!seen[$0]++' "$CACHE_FILE"
+    fi
+}
+
+save_cached_id() {
+    local new_id="$1"
+    local temp_file
+    temp_file=$(mktemp)
+    echo "$new_id" > "$temp_file"
+    if [ -f "$CACHE_FILE" ]; then
+        grep -v "^${new_id}$" "$CACHE_FILE" >> "$temp_file" || true
+    fi
+    mv "$temp_file" "$CACHE_FILE"
+}
+
+# ---- Argument Parsing with Smart Detection ----
+ASSIGNMENT_ID=""
+FILE=""
+
+if [ ${#ARGS[@]} -ge 1 ]; then
+    if [[ "${ARGS[0]}" =~ ^[0-9]+$ ]]; then
+        ASSIGNMENT_ID="${ARGS[0]}"
+        FILE="${ARGS[1]:-}"
+    else
+        FILE="${ARGS[0]}"
+    fi
+fi
+
+if [ -z "$ASSIGNMENT_ID" ]; then
+    ASSIGNMENT_ID=$(get_cached_ids | head -n 1 || true)
+    if [ -z "$ASSIGNMENT_ID" ]; then
+        echo -e "${RED}Error: **No module ID specified** and no cache history found.${RESET}"
+        echo -e "${YELLOW}Guidance:${RESET} Add a module ID manually using:"
+        echo -e "  ${BOLD}$SCRIPT_NAME --add-module <YOUR_MODULE_ID>${RESET}"
+        echo -e "  *(Note: For a URL like ${BOLD}https://hawking.computing.dcu.ie/hawking/124${RESET}, the ID is ${BOLD}124${RESET})*"
+        echo -e "Or pass it directly as the first argument:"
+        echo -e "  ${BOLD}$SCRIPT_NAME <YOUR_MODULE_ID> [file_to_submit]${RESET}"
+        exit 1
+    fi
+    echo -e "${YELLOW}Using **cached module ID**: ${BOLD}${ASSIGNMENT_ID}${RESET}"
+fi
 
 if ! command -v jq &> /dev/null; then
-    echo -e "${RED}jq is required but not installed.${RESET}"
+    echo -e "${RED}jq is required but **not installed**.${RESET}"
     exit 1
 fi
 
@@ -40,31 +135,31 @@ fi
 if [ -z "$FILE" ]; then
     FILE=$(ls -t 2>/dev/null | grep -v -E "^($SCRIPT_NAME|\..*)$" | head -n 1 || true)
     if [ -z "$FILE" ]; then
-        echo -e "${RED}No suitable file found in current directory.${RESET}"
+        echo -e "${RED}No **suitable file found** in current directory.${RESET}"
         exit 1
     fi
-    echo -e "${YELLOW}Using most recently modified file: ${FILE}${RESET}"
+    echo -e "${YELLOW}Using **most recently modified file**: ${BOLD}${FILE}${RESET}"
 fi
 
 if [ ! -f "$FILE" ]; then
-    echo -e "${RED}File not found: $FILE${RESET}"
+    echo -e "${RED}File not found: ${BOLD}$FILE${RESET}"
     exit 1
 fi
 
 # ---- Cookie handling ----
 prompt_for_cookie() {
-    echo -e "${YELLOW}Session missing or invalid. Triggering auto-login via hawking-login...${RESET}"
+    echo -e "${YELLOW}Session missing or invalid. **Triggering auto-login** via hawking-login...${RESET}"
     if command -v hawking-login &> /dev/null; then
         hawking-login
     elif [ -x "$HOME/.hawking/bin/hawking-login" ]; then
         "$HOME/.hawking/bin/hawking-login"
     else
-        echo -e "${RED}Error: hawking-login command not found in PATH or ~/.hawking/bin/.${RESET}"
+        echo -e "${RED}Error: hawking-login command **not found**.${RESET}"
         exit 1
     fi
 
     if [ ! -f "$COOKIE_FILE" ]; then
-        echo -e "${RED}Failed to acquire valid session cookie.${RESET}"
+        echo -e "${RED}Failed to acquire **valid session cookie**.${RESET}"
         exit 1
     fi
 }
@@ -73,26 +168,24 @@ if [ ! -f "$COOKIE_FILE" ]; then
     prompt_for_cookie
 fi
 
-# ---- Upload request ----
-URL="${BASE_URL}/${ASSIGNMENT_ID}/fileUpload"
-ASSIGNMENT_PAGE_URL="${BASE_URL}/${ASSIGNMENT_ID}"
+# ---- Upload request function ----
+execute_upload() {
+    local target_id="$1"
+    local url="${BASE_URL}/${target_id}/fileUpload"
+    local page_url="${BASE_URL}/${target_id}"
 
-do_upload() {
-    # 1. Visit assignment page to initialize Symfony route context & cookies
-    PAGE_HTML=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$ASSIGNMENT_PAGE_URL")
+    PAGE_HTML=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$page_url")
     
-    # 2. Extract CSRF token if present
     CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
     if [ -z "$CSRF_TOKEN" ]; then
         CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'data-csrf-token="[^"]*"' | sed -E 's/.*data-csrf-token="([^"]*)".*/\1/' || true)
     fi
 
-    # 3. Execute multipart upload request
-    CURL_CMD=(curl -s -w "\n%{http_code}" -X POST "$URL"
+    CURL_CMD=(curl -s -w "\n%{http_code}" -X POST "$url"
       -b "$COOKIE_FILE"
       -c "$COOKIE_FILE"
       -H "X-Requested-With: XMLHttpRequest"
-      -H "Referer: ${ASSIGNMENT_PAGE_URL}"
+      -H "Referer: ${page_url}"
       -H "Origin: https://hawking.computing.dcu.ie"
       -H "Accept: application/json, text/javascript, */*; q=0.01"
       -F "file=@${FILE}")
@@ -104,44 +197,70 @@ do_upload() {
     "${CURL_CMD[@]}"
 }
 
-echo -e "${YELLOW}Uploading ${FILE} to assignment ${ASSIGNMENT_ID}...${RESET}"
+echo -e "${YELLOW}Uploading ${BOLD}${FILE}${RESET}${YELLOW} to assignment ${BOLD}${ASSIGNMENT_ID}${RESET}${YELLOW}...${RESET}"
 
-RAW_RESPONSE=$(do_upload)
+RAW_RESPONSE=$(execute_upload "$ASSIGNMENT_ID")
 HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
 RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
 
-# ---- Validate HTTP Status & Payload ----
+is_valid_attempt() {
+    local code="$1"
+    local resp="$2"
+    if [ "$code" -eq 200 ] && echo "$resp" | jq -e '.attempt' >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+# ---- Handle Fallback (Cycle through ALL cached IDs if invalid or 404) ----
+if ! is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
+    echo -e "${YELLOW}Assignment ID '${ASSIGNMENT_ID}' **rejected the upload** or returned HTTP ${HTTP_CODE}. **Cycling through** all previously used IDs...${RESET}"
+    FOUND_WORKING_ID=false
+    
+    while read -r cached_id; do
+        [ -z "$cached_id" ] && continue
+        [ "$cached_id" == "$ASSIGNMENT_ID" ] && continue
+        
+        echo -e "${YELLOW}Testing history ID: ${BOLD}${cached_id}${RESET}${YELLOW}...${RESET}"
+        RAW_RESPONSE=$(execute_upload "$cached_id")
+        HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
+        RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
+        
+        if is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
+            ASSIGNMENT_ID="$cached_id"
+            FOUND_WORKING_ID=true
+            echo -e "${GREEN}Successfully **switched to cached ID**: ${BOLD}${ASSIGNMENT_ID}${RESET}"
+            break
+        fi
+    done < <(get_cached_ids)
+
+    if [ "$FOUND_WORKING_ID" = false ]; then
+        echo -e "${RED}All **cached assignment IDs failed** or rejected the file.${RESET}"
+        echo -e "${YELLOW}Guidance:${RESET} Add a working module ID using ${BOLD}$SCRIPT_NAME --add-module <id>${RESET}"
+        echo -e "  *(Note: For a URL like ${BOLD}https://hawking.computing.dcu.ie/hawking/124${RESET}, the ID is ${BOLD}124${RESET})*"
+        exit 1
+    fi
+fi
+
+# ---- Validate Session Expiry ----
 if [ "$HTTP_CODE" -eq 401 ] || [ "$HTTP_CODE" -eq 403 ] || [ "$HTTP_CODE" -eq 302 ] || [ "$HTTP_CODE" -eq 301 ]; then
-    echo -e "${RED}Session expired or unauthorized (HTTP $HTTP_CODE redirect).${RESET}"
+    echo -e "${RED}Session expired or **unauthorized** (HTTP ${HTTP_CODE} redirect).${RESET}"
     prompt_for_cookie
-    echo -e "${YELLOW}Retrying upload with fresh session...${RESET}"
-    RAW_RESPONSE=$(do_upload)
+    echo -e "${YELLOW}Retrying upload with **fresh session**...${RESET}"
+    RAW_RESPONSE=$(execute_upload "$ASSIGNMENT_ID")
     HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
     RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
 fi
 
-if [ "$HTTP_CODE" -eq 404 ]; then
-    echo -e "${RED}Assignment ID '${ASSIGNMENT_ID}' not found (HTTP 404). Check your assignment ID.${RESET}"
-    exit 1
-fi
+save_cached_id "$ASSIGNMENT_ID"
 
-if [ "$HTTP_CODE" -ne 200 ] || ! echo "$RESPONSE" | jq -e '.attempt' >/dev/null 2>&1; then
-    echo -e "${RED}Failed to process request (HTTP $HTTP_CODE). Invalid assignment ID or payload.${RESET}"
-    if [ "$DEBUG" = true ]; then
-        echo -e "${BOLD}=== Raw Response (Debug) ===${RESET}"
-        echo "$RESPONSE" | jq . 2>/dev/null || echo "$RESPONSE"
-    fi
-    exit 1
-fi
-
-# ---- Handle --debug flag ----
 if [ "$DEBUG" = true ]; then
     echo -e "${BOLD}=== Full JSON Response (Debug) ===${RESET}"
     echo "$RESPONSE" | jq .
     exit 0
 fi
 
-# ---- Header Info ----
+# ---- Header Info & Test Results Processing ----
 echo -e "${BOLD}=== Attempt Info ===${RESET}"
 echo "$RESPONSE" | jq -r '
   .attempt |
@@ -160,7 +279,6 @@ decode_b64() {
     echo "$input" | base64 --decode 2>/dev/null || echo "$input" | base64 -D 2>/dev/null || echo ""
 }
 
-# ---- Process test results ----
 echo "$RESPONSE" | jq -r '
   .tests as $tests |
   .attempt.testResults[] |
@@ -179,9 +297,9 @@ echo "$RESPONSE" | jq -r '
     EXPECTED=$(decode_b64 "$EXPECTED_B64")
 
     if [ "$CORRECT" == "true" ]; then
-        echo -e "${GREEN}${BOLD}✓ PASSED${RESET} — test $TEST_ID (${EXEC_TIME}ms)"
+        echo -e "${GREEN}${BOLD}✓ PASSED${RESET} — test ${TEST_ID} (${EXEC_TIME}ms)"
     else
-        echo -e "${RED}${BOLD}✗ FAILED${RESET} — test $TEST_ID (${EXEC_TIME}ms)"
+        echo -e "${RED}${BOLD}✗ FAILED${RESET} — test ${TEST_ID} (${EXEC_TIME}ms)"
         
         ACT_CLEAN=$(printf '%s' "$STDOUT" | tr -d '\r')
         EXP_CLEAN=$(printf '%s' "$EXPECTED" | tr -d '\r')

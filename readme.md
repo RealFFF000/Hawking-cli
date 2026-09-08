@@ -11,6 +11,7 @@ A lightweight Bash utility to submit assignment files to Hawking, automatically 
 ## Features
 
 * **Auto-Login Management (`hawking-login`):** Automatically triggers authentication and handles cookie-jar storage (`~/.hawking_cookie`) whenever sessions expire or are missing.
+* **Module ID Caching & Cycling:** Remembers successfully used module IDs, stores them with **most-recently-used prioritization**, and automatically **cycles through all cached IDs** if a `404` or module mismatch occurs.
 * **Auto-File Detection:** Picks the most recently modified file in the current directory if no file is specified.
 * **Smart Session Validation:** Detects HTTP status codes (401/403 vs 404/500) so wrong assignment IDs won't overwrite your saved session cookie.
 * **Base64 Decoding:** Decodes `.testStdout` values provided in the JSON payload using `base64`.
