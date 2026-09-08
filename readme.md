@@ -23,7 +23,7 @@ A lightweight Bash utility to submit assignment files to Hawking, automatically 
 ```bash
 
 hawking.sh [--debug] <assignment_id> [file_to_submit]
-
+```
 
 # Yes the whole thing was vibecoded
 
