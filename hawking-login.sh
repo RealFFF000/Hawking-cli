@@ -5,6 +5,7 @@ set -euo pipefail
 BASE_URL="https://hawking.computing.dcu.ie/hawking"
 LOGIN_URL="https://hawking.computing.dcu.ie/login"
 COOKIE_FILE="$HOME/.hawking_cookie"
+USER_FILE="$HOME/.hawking_user"
 HEADER_FILE=$(mktemp)
 COOKIE_JAR=$(mktemp)
 
@@ -27,7 +28,24 @@ cleanup() {
 trap cleanup EXIT
 
 echo -e "${YELLOW}Reading LDAP credentials...${RESET}"
-read -rp "Username: " USERNAME
+
+SAVED_USER=""
+if [ -f "$USER_FILE" ]; then
+    SAVED_USER=$(cat "$USER_FILE" 2>/dev/null || true)
+fi
+
+if [ -n "$SAVED_USER" ]; then
+    read -rp "Username [${SAVED_USER}]: " USERNAME
+    USERNAME="${USERNAME:-$SAVED_USER}"
+else
+    read -rp "Username: " USERNAME
+fi
+
+if [ -z "$USERNAME" ]; then
+    echo -e "${RED}Error: Username cannot be empty.${RESET}"
+    exit 1
+fi
+
 read -srp "Password: " PASSWORD
 echo ""
 
@@ -39,7 +57,7 @@ INIT_RESPONSE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$LOGIN_URL")
 CSRF_TOKEN=$(echo "$INIT_RESPONSE" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
 
 if [ -z "$CSRF_TOKEN" ]; then
-    echo -e "${RED}Failed to extract CSRF token from login page.${RESET}"
+    echo -e "${RED}Failed to extract **CSRF token** from login page.${RESET}"
     exit 1
 fi
 
@@ -59,15 +77,19 @@ LOCATION=$(grep -i "^Location:" "$HEADER_FILE" | awk '{print $2}' | tr -d '\r\n'
 
 # 3. Check if we received the expected 302 Redirect
 if [ "$HTTP_STATUS" -ne 302 ] && [ "$HTTP_STATUS" -ne 303 ]; then
-    echo -e "${RED}Login failed: Server did not issue a 302 redirect (HTTP $HTTP_STATUS).${RESET}"
+    echo -e "${RED}Login failed: Server did not issue a 302 redirect (HTTP ${HTTP_STATUS}).${RESET}"
     exit 1
 fi
 
 # If redirected back to /login or /login?error, the credentials were bad
 if echo "$LOCATION" | grep -qE "login\?error|/login$"; then
-    echo -e "${RED}Login failed: Invalid credentials.${RESET}"
+    echo -e "${RED}Login failed: **Invalid credentials**.${RESET}"
     exit 1
 fi
+
+# Save successful username for future use
+echo "$USERNAME" > "$USER_FILE"
+chmod 600 "$USER_FILE"
 
 # 4. Extract the authenticated session ID set during the 302 response
 AUTH_SESS=$(grep -i "Set-Cookie: PHPSESSID=" "$HEADER_FILE" | sed -E 's/.*PHPSESSID=([^;]+).*/\1/' | tail -n 1 | tr -d '\r\n' || true)
@@ -93,7 +115,7 @@ PORTAL_RESPONSE=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$TARGET_URL")
 
 # Final sanity check: ensure we didn't end up on a login form
 if echo "$PORTAL_RESPONSE" | grep -q 'name="_username"'; then
-    echo -e "${RED}Login failed: Session rejected on post-login redirect.${RESET}"
+    echo -e "${RED}Login failed: **Session rejected** on post-login redirect.${RESET}"
     rm -f "$COOKIE_FILE"
     exit 1
 fi
