@@ -79,7 +79,7 @@ if [ "$VOCAL" = true ]; then
         echo -e "\n${GREEN}${BOLD}Successfully updated${RESET}"
     fi
 else
-    echo "${BOLD}Updating hawking-cli"
+    echo -e "${BOLD}Updating hawking-cli...${RESET}"
     if ! git pull -q >/dev/null 2>&1; then
         echo -e "${RED}${BOLD}Update failed${RESET}"
         exit 1
