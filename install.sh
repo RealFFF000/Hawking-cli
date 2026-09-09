@@ -62,5 +62,4 @@ echo -e "\n${BOLD}Run this to reload your shell:${RESET}"
 echo -e "  source ~/.zshrc  (or source ~/.bashrc)"
 
 echo -e "\n${GREEN}${BOLD}Setup complete! You can now run:${RESET}"
-echo -e "  hawking <module_id> [file_to_submit]"
-echo -e "  hawking-login\n"
+echo -e "  hawking [file_to_submit]"

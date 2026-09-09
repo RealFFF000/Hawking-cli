@@ -349,12 +349,21 @@ for FILE in "${FILES[@]}"; do
     fi
 
     if [ "$IS_MULTI" = true ]; then
-        FILE_ALL_PASSED=$(echo "$RESPONSE" | jq -r '[.attempt.testResults[]? .correct] | if length == 0 then false else all(. == true) end')
+        STATS=$(echo "$RESPONSE" | jq -r '
+            [.attempt.testResults[]? .correct] |
+            [
+              (map(select(.)) | length),
+              length
+            ] | @tsv
+        ')
+        read -r PASSED_COUNT TOTAL_COUNT <<< "$STATS"
+        TOTAL_COUNT="${TOTAL_COUNT:-0}"
+        PASSED_COUNT="${PASSED_COUNT:-0}"
 
-        if [ "$FILE_ALL_PASSED" = "true" ]; then
-            echo -e "${GREEN}${BOLD}✓ ${FILE}${RESET} — PASSED"
+        if [ "$TOTAL_COUNT" -gt 0 ] && [ "$PASSED_COUNT" -eq "$TOTAL_COUNT" ]; then
+            echo -e "${GREEN}${BOLD}✓ ${FILE}${RESET} — (${PASSED_COUNT}/${TOTAL_COUNT})"
         else
-            echo -e "${RED}${BOLD}✗ ${FILE}${RESET} — FAILED"
+            echo -e "${RED}${BOLD}✗ ${FILE}${RESET} — (${PASSED_COUNT}/${TOTAL_COUNT})"
         fi
     else
         echo -e "${BOLD}=== Attempt Info ===${RESET}"
