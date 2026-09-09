@@ -5,6 +5,7 @@ set -euo pipefail
 INSTALL_DIR="$HOME/.hawking/bin"
 SUBMIT_SRC="hawking.sh"
 LOGIN_SRC="hawking-login.sh"
+AUTOUPDATE_SRC="autoupdater.sh"
 
 GREEN="\033[0;32m"
 RED="\033[0;31m"
@@ -28,6 +29,12 @@ else
     exit 1
 fi
 
+# 3. Verify autoupdater.sh exists
+if [ ! -f "$AUTOUPDATE_SRC" ]; then
+    echo -e "${RED}Error: **${AUTOUPDATE_SRC}** not found in the current directory.${RESET}"
+    exit 1
+fi
+
 # Create target directory
 mkdir -p "$INSTALL_DIR"
 
@@ -38,7 +45,10 @@ chmod +x "$INSTALL_DIR/hawking"
 cp "$LOGIN_FILE" "$INSTALL_DIR/hawking-login"
 chmod +x "$INSTALL_DIR/hawking-login"
 
-echo -e "${GREEN}${BOLD}✓ Installed hawking and hawking-login to ${INSTALL_DIR}${RESET}"
+cp "$AUTOUPDATE_SRC" "$INSTALL_DIR/hawking-update"
+chmod +x "$INSTALL_DIR/hawking-update"
+
+echo -e "${GREEN}${BOLD}✓ Installed hawking, hawking-login, and hawking-update to ${INSTALL_DIR}${RESET}"
 
 # Path export line
 PATH_LINE="export PATH=\"\$HOME/.hawking/bin:\$PATH\""
