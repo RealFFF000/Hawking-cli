@@ -27,8 +27,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo -e "${YELLOW}Reading LDAP credentials...${RESET}"
-
+# ---- Retrieve Username ----
 SAVED_USER=""
 if [ -f "$USER_FILE" ]; then
     SAVED_USER=$(cat "$USER_FILE" 2>/dev/null || true)
@@ -46,8 +45,23 @@ if [ -z "$USERNAME" ]; then
     exit 1
 fi
 
-read -srp "Password: " PASSWORD
-echo ""
+# ---- Attempt to Load Password from OS Keychain ----
+PASSWORD=""
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    PASSWORD=$(security find-generic-password -s "hawking" -a "$USERNAME" -w 2>/dev/null || true)
+elif command -v secret-tool &> /dev/null; then
+    PASSWORD=$(secret-tool lookup service hawking username "$USERNAME" 2>/dev/null || true)
+fi
+
+# If not found in keychain, prompt the user
+if [ -z "$PASSWORD" ]; then
+    read -srp "Password: " PASSWORD
+    echo ""
+    PROMPTED_PASSWORD=true
+else
+    echo -e "${GREEN}Using **securely stored password** from system keychain.${RESET}"
+    PROMPTED_PASSWORD=false
+fi
 
 echo -e "${YELLOW}Fetching CSRF token...${RESET}"
 
@@ -90,6 +104,15 @@ fi
 # Save successful username for future use
 echo "$USERNAME" > "$USER_FILE"
 chmod 600 "$USER_FILE"
+
+# Securely save password to OS Keychain if it was newly typed
+if [ "$PROMPTED_PASSWORD" = true ]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        security add-generic-password -U -s "hawking" -a "$USERNAME" -w "$PASSWORD" 2>/dev/null || true
+    elif command -v secret-tool &> /dev/null; then
+        echo "$PASSWORD" | secret-tool store --label='Hawking CLI' service hawking username "$USERNAME" 2>/dev/null || true
+    fi
+fi
 
 # 4. Extract the authenticated session ID set during the 302 response
 AUTH_SESS=$(grep -i "Set-Cookie: PHPSESSID=" "$HEADER_FILE" | sed -E 's/.*PHPSESSID=([^;]+).*/\1/' | tail -n 1 | tr -d '\r\n' || true)
