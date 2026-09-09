@@ -4,6 +4,7 @@ set -euo pipefail
 
 GREEN="\033[0;32m"
 RED="\033[0;31m"
+YELLOW="\033[0;33m"
 BOLD="\033[1m"
 RESET="\033[0m"
 
@@ -39,32 +40,61 @@ if [ ! -f "$INSTALL_SCRIPT" ]; then
     if [ "$VOCAL" = true ]; then
         echo -e "${RED}Error: **install.sh not found** in the current directory.${RESET}"
     fi
+    echo -e "${RED}${BOLD}Update failed${RESET}"
     exit 1
 fi
+
+HEAD_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "")
 
 if [ "$VOCAL" = true ]; then
     echo -e "${BOLD}Pulling latest changes from git...${RESET}"
     if ! git pull; then
-        echo -e "${RED}Error: **git pull failed**.${RESET}"
+        echo -e "${RED}${BOLD}Update failed${RESET}"
         exit 1
     fi
 
-    HASH=$(git log -1 --pretty=format:"%h")
-    DATE=$(git log -1 --pretty=format:"%cd")
-    MSG=$(git log -1 --pretty=format:"%s")
+    HEAD_AFTER=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-    echo -e "\n${BOLD}Latest Commit Details:${RESET}"
-    echo -e "  ${BOLD}Hash:${RESET}    ${HASH}"
-    echo -e "  ${BOLD}Date:${RESET}    ${DATE}"
-    echo -e "  ${BOLD}Message:${RESET} ${MSG}"
-    echo -e "\n"
+    if [ "$HEAD_BEFORE" != "$HEAD_AFTER" ]; then
+        HASH=$(git log -1 --pretty=format:"%h")
+        DATE=$(git log -1 --pretty=format:"%cd")
+        MSG=$(git log -1 --pretty=format:"%s")
+
+        echo -e "\n${BOLD}Latest Commit Details:${RESET}"
+        echo -e "  ${BOLD}Hash:${RESET}    ${HASH}"
+        echo -e "  ${BOLD}Date:${RESET}    ${DATE}"
+        echo -e "  ${BOLD}Message:${RESET} ${MSG}"
+        echo -e "\n"
+    fi
 
     echo -e "${BOLD}Running installer...${RESET}"
-    bash "$INSTALL_SCRIPT"
+    if ! bash "$INSTALL_SCRIPT"; then
+        echo -e "${RED}${BOLD}Update failed${RESET}"
+        exit 1
+    fi
 
-    echo -e "\n${GREEN}${BOLD}✓ Update completed successfully!${RESET}"
+    if [ "$HEAD_BEFORE" = "$HEAD_AFTER" ]; then
+        echo -e "\n${YELLOW}${BOLD}Already up to date${RESET}"
+    else
+        echo -e "\n${GREEN}${BOLD}Successfully updated${RESET}"
+    fi
 else
-    echo "Updating **hawking-cli**..."
-    git pull -q >/dev/null 2>&1 || exit 1
-    bash "$INSTALL_SCRIPT" >/dev/null 2>&1 || exit 1
+    echo "${BOLD}Updating hawking-cli"
+    if ! git pull -q >/dev/null 2>&1; then
+        echo -e "${RED}${BOLD}Update failed${RESET}"
+        exit 1
+    fi
+
+    HEAD_AFTER=$(git rev-parse HEAD 2>/dev/null || echo "")
+
+    if ! bash "$INSTALL_SCRIPT" >/dev/null 2>&1; then
+        echo -e "${RED}${BOLD}Update failed${RESET}"
+        exit 1
+    fi
+
+    if [ "$HEAD_BEFORE" = "$HEAD_AFTER" ]; then
+        echo -e "${YELLOW}Already up to date${RESET}"
+    else
+        echo -e "${GREEN}Successfully updated${RESET}"
+    fi
 fi
