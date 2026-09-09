@@ -74,10 +74,10 @@ now=$(date +%s)
 if [ "$SHOW_VERSION" = true ]; then
     if [ -d "$HOME/.hawking/.git" ]; then
         echo -e "${BOLD}Hawking CLI Version (Latest Commit):${RESET}"
-        git -C "$HOME/.hawking" log -1 --pretty=format:"${CYAN}%h${RESET} - ${GREEN}%s${RESET} ${YELLOW}(%ar)%Creset [%an]" --date=relative
+        git -C "$HOME/.hawking" log -1 --pretty=format:"${CYAN}%h${RESET} - ${GREEN}%s${RESET} ${YELLOW}(%ar)%Creset [%an]" --date=relative 2>/dev/null || echo -e "${YELLOW}No commit history found.${RESET}"
         echo ""
     else
-        echo -e "${YELLOW}Hawking CLI (Git repository context not found in ~/.hawking)${RESET}"
+        echo -e "${YELLOW}Hawking CLI (**Git repository context not found** in ~/.hawking)${RESET}"
     fi
     exit 0
 fi
