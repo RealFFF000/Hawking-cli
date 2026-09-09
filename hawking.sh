@@ -82,19 +82,19 @@ if [ "$SHOW_VERSION" = true ]; then
     exit 0
 fi
 
-# ---- Handle --update ----
+# ---- Handle --update (Forces Overwrite of Local Changes) ----
 if [ "$FORCE_UPDATE" = true ]; then
     echo "$now" > "$UPDATE_CHECK_FILE"
     if [ -d "$HOME/.hawking/.git" ]; then
-        echo -e "${YELLOW}Forcing repository **update**...${RESET}"
-        if git -C "$HOME/.hawking" pull --no-rebase; then
+        echo -e "${YELLOW}Forcing repository **update** (overriding local changes)...${RESET}"
+        if git -C "$HOME/.hawking" fetch origin && git -C "$HOME/.hawking" reset --hard origin/main; then
             if [ -f "$HOME/.hawking/hawking.sh" ]; then
                 cp "$HOME/.hawking/hawking.sh" "$HOME/.hawking/bin/hawking"
                 chmod +x "$HOME/.hawking/bin/hawking"
             fi
             echo -e "${GREEN}Successfully **updated** and re-installed Hawking CLI.${RESET}"
         else
-            echo -e "${RED}Update **failed** (restricted access or network issue). Cooldown reset.${RESET}"
+            echo -e "${RED}Update **failed** (network issue). Cooldown reset.${RESET}"
         fi
     else
         echo -e "${YELLOW}No **git repository** found in ~/.hawking to update.${RESET}"
@@ -145,7 +145,7 @@ if [ -n "$ADD_MODULE_ID" ]; then
     exit 0
 fi
 
-# ---- Weekly Synchronous Update Check (Cooldown on Success & Failure) ----
+# ---- Weekly Synchronous Update Check ----
 should_check=false
 if [ ! -f "$UPDATE_CHECK_FILE" ]; then
     should_check=true
@@ -159,7 +159,7 @@ fi
 if [ "$should_check" = true ]; then
     echo "$now" > "$UPDATE_CHECK_FILE"
     if [ -d "$HOME/.hawking/.git" ]; then
-        if git -C "$HOME/.hawking" pull --no-rebase --quiet 2>/dev/null; then
+        if git -C "$HOME/.hawking" fetch origin --quiet 2>/dev/null && git -C "$HOME/.hawking" reset --hard origin/main --quiet 2>/dev/null; then
             if [ -f "$HOME/.hawking/hawking.sh" ]; then
                 cp "$HOME/.hawking/hawking.sh" "$HOME/.hawking/bin/hawking"
                 chmod +x "$HOME/.hawking/bin/hawking"
