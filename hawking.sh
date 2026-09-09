@@ -88,7 +88,11 @@ if [ "$FORCE_UPDATE" = true ]; then
     if [ -d "$HOME/.hawking/.git" ]; then
         echo -e "${YELLOW}Forcing repository **update**...${RESET}"
         if git -C "$HOME/.hawking" pull --no-rebase; then
-            echo -e "${GREEN}Successfully **updated** Hawking CLI.${RESET}"
+            if [ -f "$HOME/.hawking/hawking.sh" ]; then
+                cp "$HOME/.hawking/hawking.sh" "$HOME/.hawking/bin/hawking"
+                chmod +x "$HOME/.hawking/bin/hawking"
+            fi
+            echo -e "${GREEN}Successfully **updated** and re-installed Hawking CLI.${RESET}"
         else
             echo -e "${RED}Update **failed** (restricted access or network issue). Cooldown reset.${RESET}"
         fi
@@ -155,7 +159,12 @@ fi
 if [ "$should_check" = true ]; then
     echo "$now" > "$UPDATE_CHECK_FILE"
     if [ -d "$HOME/.hawking/.git" ]; then
-        git -C "$HOME/.hawking" pull --no-rebase --quiet 2>/dev/null || true
+        if git -C "$HOME/.hawking" pull --no-rebase --quiet 2>/dev/null; then
+            if [ -f "$HOME/.hawking/hawking.sh" ]; then
+                cp "$HOME/.hawking/hawking.sh" "$HOME/.hawking/bin/hawking"
+                chmod +x "$HOME/.hawking/bin/hawking"
+            fi
+        fi
     fi
 fi
 
