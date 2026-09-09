@@ -24,15 +24,19 @@ A lightweight **Bash utility** to submit assignment files to Hawking, automatica
 
 ## Installation
 
+```bash
 git clone <this repo>
 cd hawking-cli
 ./install.sh
+```
 
 ## Usage
 
 ### Basic Command Structure
 
+```bash
 hawking [file_to_submit]
+```
 
 By default, if no file is specified, hawking picks the **most-recently edited file** in the current working directory.
 
