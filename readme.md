@@ -33,5 +33,7 @@ cd hawking-cli
 ### Basic Command Structure
 
 ```bash
-hawking [--debug] <module_id> [file_to_submit]
+hawking [file_to_submit]
 ```
+
+By default, if no file is specified, hawking picks the most-recently edited file in the current working directory
