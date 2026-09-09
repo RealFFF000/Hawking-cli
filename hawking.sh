@@ -447,6 +447,7 @@ for FILE in "${FILES[@]}"; do
         ALL_PASSED=true
 
         while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT STDERR; do
+            STDOUT=$(printf '%b' "$STDOUT")
             EXPECTED=$(decode_b64 "$EXPECTED_B64")
 
             if [ "$CORRECT" == "true" ]; then
@@ -458,34 +459,62 @@ for FILE in "${FILES[@]}"; do
                 ACT_CLEAN=$(printf '%s' "$STDOUT" | tr -d '\r')
                 EXP_CLEAN=$(printf '%s' "$EXPECTED" | tr -d '\r')
 
-                echo -e "  ${BOLD}Expected:${RESET} ${EXP_CLEAN:-<empty>}"
-                printf "  ${BOLD}Actual:  ${RESET} "
-
-                ACT_LEN=${#ACT_CLEAN}
-                EXP_LEN=${#EXP_CLEAN}
-                MAX_LEN=$ACT_LEN
-                [ $EXP_LEN -gt $MAX_LEN ] && MAX_LEN=$EXP_LEN
-
-                if [ $MAX_LEN -eq 0 ]; then
-                    printf "${RED}%s${RESET}\n" "$ACT_CLEAN"
-                else
-                    for (( i=0; i<MAX_LEN; i++ )); do
-                        CHAR_ACT="${ACT_CLEAN:$i:1}"
-                        CHAR_EXP="${EXP_CLEAN:$i:1}"
-
-                        if [ "$CHAR_ACT" == "$CHAR_EXP" ] && [ -n "$CHAR_ACT" ]; then
-                            printf "%s" "$CHAR_ACT"
-                        else
-                            PRINT_CHAR="${CHAR_ACT:- }"
-                            printf "${RED}%s${RESET}" "$PRINT_CHAR"
-                        fi
-                    done
-                    printf "\n"
+                IS_MULTILINE=false
+                if [[ "$ACT_CLEAN" == *$'\n'* ]] || [[ "$EXP_CLEAN" == *$'\n'* ]]; then
+                    IS_MULTILINE=true
                 fi
-                echo ""
+
+                if [ "$IS_MULTILINE" = true ]; then
+                    echo -e "  ${BOLD}Expected:${RESET}"
+                    printf '%s\n' "${EXP_CLEAN:-<empty>}" | awk '{print "    │ " $0}'
+                    echo -e "  ${BOLD}Actual:  ${RESET}"
+                    EXP_DATA="$EXP_CLEAN" ACT_DATA="$ACT_CLEAN" awk -v green="${GREEN}" -v red="${RED}" -v reset="${RESET}" '
+                    BEGIN {
+                        n_exp = split(ENVIRON["EXP_DATA"], exp_lines, "\n")
+                        n_act = split(ENVIRON["ACT_DATA"], act_lines, "\n")
+                        for (i = 1; i <= n_act; i++) {
+                            line = act_lines[i]
+                            if (i <= n_exp && line == exp_lines[i]) {
+                                print "    │ " green line reset
+                            } else {
+                                print "    │ " red line reset
+                            }
+                        }
+                    }'
+                else
+                    echo -e "  ${BOLD}Expected:${RESET} ${EXP_CLEAN:-<empty>}"
+                    printf "  ${BOLD}Actual:  ${RESET} "
+
+                    ACT_LEN=${#ACT_CLEAN}
+                    EXP_LEN=${#EXP_CLEAN}
+                    MAX_LEN=$ACT_LEN
+                    [ $EXP_LEN -gt $MAX_LEN ] && MAX_LEN=$EXP_LEN
+
+                    if [ $MAX_LEN -eq 0 ]; then
+                        printf "${RED}%s${RESET}\n" "$ACT_CLEAN"
+                    else
+                        for (( i=0; i<MAX_LEN; i++ )); do
+                            CHAR_ACT="${ACT_CLEAN:$i:1}"
+                            CHAR_EXP="${EXP_CLEAN:$i:1}"
+
+                            if [ "$CHAR_ACT" == "$CHAR_EXP" ] && [ -n "$CHAR_ACT" ]; then
+                                printf "%s" "$CHAR_ACT"
+                            else
+                                PRINT_CHAR="${CHAR_ACT:- }"
+                                printf "${RED}%s${RESET}" "$PRINT_CHAR"
+                            fi
+                        done
+                        printf "\n"
+                    fi
+                fi
             fi
 
-            [ -n "$STDERR" ] && echo -e "  ${RED}stderr:${RESET} ${STDERR}"
+            if [ -n "$STDERR" ]; then
+                echo -e "  ${RED}${BOLD}Stderr:  ${RESET}"
+                printf '%s\n' "$(printf '%b' "$STDERR" | tr -d '\r')" | awk '{print "    │ " $0}'
+            fi
+            echo ""
+
         done < <(echo "$RESPONSE" | jq -r '
           .tests as $tests |
           .attempt.testResults[] |
