@@ -1,5 +1,8 @@
 # Hawking-cli
 
+## AKA einstein-but-for-losers
+
+
 A lightweight Bash utility to submit assignment files to Hawking, automatically detect response errors, decode base64 test cases, and display a character-by-character colorized diff between expected and actual outputs.
 
 ## Requirements
