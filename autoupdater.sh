@@ -45,7 +45,7 @@ if [ "$VOCAL" = true ]; then
     fi
 
     echo -e "\n\033[1mLatest Commit Details:\033[0m"
-    git log -1 --pretty=format:"  \033[1mHash:\033[0m    %h%n  \033[1mDate:\033[0m    %cd%n  \033[1mMessage:\033[0m %s"
+    git --no-pager log -1 --pretty=format:"  \033[1mHash:\033[0m    %h%n  \033[1mDate:\033[0m    %cd%n  \033[1mMessage:\033[0m %s"
     echo -e "\n"
 
     echo -e "\033[1mRunning installer...\033[0m"
