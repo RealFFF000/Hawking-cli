@@ -46,3 +46,4 @@ By default, if no file is specified, hawking picks the **most-recently edited fi
 * **`--add-module <ID>`**: Manually add a **module ID** to cache.
 * **`--clear-cache`**: Clear the **history cache**.
 * **`--logout`**: Clear **session cookies** and saved usernames.
+* **`--version`**: Print the current commit hash.

@@ -12,6 +12,7 @@ SCRIPT_NAME="$(basename "$0")"
 GREEN="\033[0;32m"
 RED="\033[0;31m"
 YELLOW="\033[0;33m"
+CYAN="\033[0;36m"
 BOLD="\033[1m"
 RESET="\033[0m"
 
@@ -22,6 +23,7 @@ CLEAR_CACHE=false
 SHOW_MODULES=false
 LOGOUT=false
 FORCE_UPDATE=false
+SHOW_VERSION=false
 ADD_MODULE_ID=""
 ARGS=()
 
@@ -51,6 +53,10 @@ while [[ $# -gt 0 ]]; do
             FORCE_UPDATE=true
             shift
             ;;
+        --version|-v)
+            SHOW_VERSION=true
+            shift
+            ;;
         --add-module)
             ADD_MODULE_ID="$2"
             shift 2
@@ -63,6 +69,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 now=$(date +%s)
+
+# ---- Handle --version ----
+if [ "$SHOW_VERSION" = true ]; then
+    if [ -d "$HOME/.hawking/.git" ]; then
+        echo -e "${BOLD}Hawking CLI Version (Latest Commit):${RESET}"
+        git -C "$HOME/.hawking" log -1 --pretty=format:"${CYAN}%h${RESET} - ${GREEN}%s${RESET} ${YELLOW}(%ar)%Creset [%an]" --date=relative
+        echo ""
+    else
+        echo -e "${YELLOW}Hawking CLI (Git repository context not found in ~/.hawking)${RESET}"
+    fi
+    exit 0
+fi
 
 # ---- Handle --update ----
 if [ "$FORCE_UPDATE" = true ]; then
