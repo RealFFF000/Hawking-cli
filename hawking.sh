@@ -6,6 +6,7 @@ BASE_URL="https://hawking.computing.dcu.ie/hawking"
 COOKIE_FILE="$HOME/.hawking_cookie"
 USER_FILE="$HOME/.hawking_user"
 CACHE_FILE="$HOME/.hawking_history"
+UPDATE_CHECK_FILE="$HOME/.hawking_last_update"
 SCRIPT_NAME="$(basename "$0")"
 
 GREEN="\033[0;32m"
@@ -13,6 +14,27 @@ RED="\033[0;31m"
 YELLOW="\033[0;33m"
 BOLD="\033[1m"
 RESET="\033[0m"
+
+# ---- Weekly Synchronous Update Check (with Cooldown on Failure) ----
+now=$(date +%s)
+should_check=false
+if [ ! -f "$UPDATE_CHECK_FILE" ]; then
+    should_check=true
+else
+    last_check=$(cat "$UPDATE_CHECK_FILE" 2>/dev/null || echo 0)
+    if [ $((now - last_check)) -gt 604800 ]; then
+        should_check=true
+    fi
+fi
+
+if [ "$should_check" = true ]; then
+    echo "$now" > "$UPDATE_CHECK_FILE"
+    if command -v hawking-update &> /dev/null; then
+        hawking-update || true
+    elif [ -x "$HOME/.hawking/bin/hawking-update" ]; then
+        "$HOME/.hawking/bin/hawking-update" || true
+    fi
+fi
 
 # ---- Parse Flags & Options ----
 DEBUG=false
@@ -129,11 +151,11 @@ is_cookie_expired() {
     if [ ! -f "$COOKIE_FILE" ]; then
         return 0
     fi
-    local now
-    now=$(date +%s)
+    local now_epoch
+    now_epoch=$(date +%s)
     local mtime
     mtime=$(stat -c %Y "$COOKIE_FILE" 2>/dev/null || stat -f %m "$COOKIE_FILE" 2>/dev/null || echo 0)
-    local age=$(( now - mtime ))
+    local age=$(( now_epoch - mtime ))
     [ $age -gt 7200 ]
 }
 
