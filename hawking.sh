@@ -74,7 +74,7 @@ now=$(date +%s)
 if [ "$SHOW_VERSION" = true ]; then
     if [ -d "$HOME/.hawking/.git" ]; then
         echo -e "${BOLD}Hawking CLI Version (Latest Commit):${RESET}"
-	git --no-pager -C "$HOME/.hawking" -c color.ui=always log -1 --pretty=format:"%C(cyan)%h%Creset - %C(green)%s%Creset %C(yellow)(%ar)%Creset [%an]" --date=relative 2>/dev/null || echo -e "${YELLOW}No commit history found.${RESET}"
+        git --no-pager -C "$HOME/.hawking" -c color.ui=always log -1 --pretty=format:"%C(cyan)%h%Creset - %C(green)%s%Creset %C(yellow)(%ar)%Creset [%an]" --date=relative 2>/dev/null || echo -e "${YELLOW}No commit history found.${RESET}"
         echo ""
     else
         echo -e "${YELLOW}Hawking CLI (**Git repository context not found** in ~/.hawking)${RESET}"
@@ -505,7 +505,14 @@ for FILE in "${FILES[@]}"; do
             echo ""
             echo -e "${GREEN}${BOLD}🎉 All test cases passed successfully for ${FILE}! Great job!${RESET}"
             if [ $((RANDOM % 100)) -eq 0 ]; then
-                echo -e "${GREEN}${BOLD}good boy${RESET}"
+                UNAME=""
+                [ -f "$USER_FILE" ] && UNAME=$(cat "$USER_FILE" | tr -d '[:space:]')
+                FIRST_NAME="${UNAME%%.*}"
+                if [[ "${FIRST_NAME,,}" =~ a$ ]]; then
+                    echo -e "${GREEN}${BOLD}good girl${RESET}"
+                else
+                    echo -e "${GREEN}${BOLD}good boy${RESET}"
+                fi
             fi
         fi
     fi
