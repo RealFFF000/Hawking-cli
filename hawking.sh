@@ -287,6 +287,13 @@ if [ ${#ARGS[@]} -ge 1 ]; then
     fi
 fi
 
+for f in "${FILES[@]}"; do
+    if [ ! -f "$f" ]; then
+        echo -e "${RED}Error: **No such file exists**: ${BOLD}${f}${RESET}"
+        exit 1
+    fi
+done
+
 if [ -z "$ASSIGNMENT_ID" ]; then
     ASSIGNMENT_ID=$(get_cached_ids | head -n 1 || true)
     if [ -z "$ASSIGNMENT_ID" ]; then
