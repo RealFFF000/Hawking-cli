@@ -15,31 +15,13 @@ YELLOW="\033[0;33m"
 BOLD="\033[1m"
 RESET="\033[0m"
 
-# ---- Weekly Synchronous Update Check (Cooldown on Success & Failure) ----
-now=$(date +%s)
-should_check=false
-if [ ! -f "$UPDATE_CHECK_FILE" ]; then
-    should_check=true
-else
-    last_check=$(cat "$UPDATE_CHECK_FILE" 2>/dev/null || echo 0)
-    if [ $((now - last_check)) -gt 604800 ]; then
-        should_check=true
-    fi
-fi
-
-if [ "$should_check" = true ]; then
-    echo "$now" > "$UPDATE_CHECK_FILE"
-    if [ -d "$HOME/.hawking/.git" ]; then
-        git -C "$HOME/.hawking" pull --no-rebase --quiet 2>/dev/null || true
-    fi
-fi
-
-# ---- Parse Flags & Options ----
+# ---- Parse Flags & Options First ----
 DEBUG=false
 VOCAL=false
 CLEAR_CACHE=false
 SHOW_MODULES=false
 LOGOUT=false
+FORCE_UPDATE=false
 ADD_MODULE_ID=""
 ARGS=()
 
@@ -65,6 +47,10 @@ while [[ $# -gt 0 ]]; do
             LOGOUT=true
             shift
             ;;
+        --update)
+            FORCE_UPDATE=true
+            shift
+            ;;
         --add-module)
             ADD_MODULE_ID="$2"
             shift 2
@@ -75,6 +61,24 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+now=$(date +%s)
+
+# ---- Handle --update ----
+if [ "$FORCE_UPDATE" = true ]; then
+    echo "$now" > "$UPDATE_CHECK_FILE"
+    if [ -d "$HOME/.hawking/.git" ]; then
+        echo -e "${YELLOW}Forcing repository **update**...${RESET}"
+        if git -C "$HOME/.hawking" pull --no-rebase; then
+            echo -e "${GREEN}Successfully **updated** Hawking CLI.${RESET}"
+        else
+            echo -e "${RED}Update **failed** (restricted access or network issue). Cooldown reset.${RESET}"
+        fi
+    else
+        echo -e "${YELLOW}No **git repository** found in ~/.hawking to update.${RESET}"
+    fi
+    exit 0
+fi
 
 # ---- Handle --logout ----
 if [ "$LOGOUT" = true ]; then
@@ -117,6 +121,24 @@ if [ -n "$ADD_MODULE_ID" ]; then
     mv "$temp_file" "$CACHE_FILE"
     echo -e "${GREEN}Successfully **added module ID** ${BOLD}${ADD_MODULE_ID}${RESET}${GREEN} to cache.${RESET}"
     exit 0
+fi
+
+# ---- Weekly Synchronous Update Check (Cooldown on Success & Failure) ----
+should_check=false
+if [ ! -f "$UPDATE_CHECK_FILE" ]; then
+    should_check=true
+else
+    last_check=$(cat "$UPDATE_CHECK_FILE" 2>/dev/null || echo 0)
+    if [ $((now - last_check)) -gt 604800 ]; then
+        should_check=true
+    fi
+fi
+
+if [ "$should_check" = true ]; then
+    echo "$now" > "$UPDATE_CHECK_FILE"
+    if [ -d "$HOME/.hawking/.git" ]; then
+        git -C "$HOME/.hawking" pull --no-rebase --quiet 2>/dev/null || true
+    fi
 fi
 
 # ---- Load & Manage Cache ----
