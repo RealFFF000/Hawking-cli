@@ -15,7 +15,7 @@ YELLOW="\033[0;33m"
 BOLD="\033[1m"
 RESET="\033[0m"
 
-# ---- Weekly Synchronous Update Check (with Cooldown on Failure) ----
+# ---- Weekly Synchronous Update Check (Cooldown on Success & Failure) ----
 now=$(date +%s)
 should_check=false
 if [ ! -f "$UPDATE_CHECK_FILE" ]; then
@@ -29,10 +29,8 @@ fi
 
 if [ "$should_check" = true ]; then
     echo "$now" > "$UPDATE_CHECK_FILE"
-    if command -v hawking-update &> /dev/null; then
-        hawking-update || true
-    elif [ -x "$HOME/.hawking/bin/hawking-update" ]; then
-        "$HOME/.hawking/bin/hawking-update" || true
+    if [ -d "$HOME/.hawking/.git" ]; then
+        git -C "$HOME/.hawking" pull --no-rebase --quiet 2>/dev/null || true
     fi
 fi
 

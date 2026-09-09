@@ -2,74 +2,51 @@
 
 set -euo pipefail
 
-INSTALL_DIR="$HOME/.hawking/bin"
-SUBMIT_SRC="hawking.sh"
-LOGIN_SRC="hawking-login.sh"
-AUTOUPDATE_SRC="autoupdater.sh"
+INSTALL_DIR="$HOME/.hawking"
+BIN_DIR="$INSTALL_DIR/bin"
 
 GREEN="\033[0;32m"
-RED="\033[0;31m"
+YELLOW="\033[0;33m"
 BOLD="\033[1m"
 RESET="\033[0m"
 
-# 1. Verify hawking.sh exists
-if [ ! -f "$SUBMIT_SRC" ]; then
-    echo -e "${RED}Error: **${SUBMIT_SRC}** not found in the current directory.${RESET}"
-    exit 1
-fi
+echo -e "${BOLD}Installing Hawking CLI...${RESET}"
 
-# 2. Locate hawking-login source file
-LOGIN_FILE=""
-if [ -f "$LOGIN_SRC" ]; then
-    LOGIN_FILE="$LOGIN_SRC"
-elif [ -f "hawking-login" ]; then
-    LOGIN_FILE="hawking-login"
+# Create directories
+mkdir -p "$BIN_DIR"
+
+# Copy main submission script and rename to 'hawking'
+if [ -f "hawking.sh" ]; then
+    cp hawking.sh "$BIN_DIR/hawking"
+    chmod +x "$BIN_DIR/hawking"
+    echo -e "${GREEN}Installed **hawking** command.${RESET}"
 else
-    echo -e "${RED}Error: Neither **hawking-login.sh** nor **hawking-login** found in the current directory.${RESET}"
-    exit 1
+    echo -e "${YELLOW}Warning: hawking.sh **not found** in current directory.${RESET}"
 fi
 
-# 3. Verify autoupdater.sh exists
-if [ ! -f "$AUTOUPDATE_SRC" ]; then
-    echo -e "${RED}Error: **${AUTOUPDATE_SRC}** not found in the current directory.${RESET}"
-    exit 1
+# Copy login script if present
+if [ -f "hawking-login" ]; then
+    cp hawking-login "$BIN_DIR/hawking-login"
+    chmod +x "$BIN_DIR/hawking-login"
+    echo -e "${GREEN}Installed **hawking-login** command.${RESET}"
 fi
 
-# Create target directory
-mkdir -p "$INSTALL_DIR"
+# Preserve git repository context locally for the quiet weekly pull
+if [ -d ".git" ]; then
+    rm -rf "$INSTALL_DIR/.git"
+    cp -R .git "$INSTALL_DIR/" 2>/dev/null || true
+    echo -e "${GREEN}Preserved **git repository** for background updates.${RESET}"
+fi
 
-# Copy and make binaries executable
-cp "$SUBMIT_SRC" "$INSTALL_DIR/hawking"
-chmod +x "$INSTALL_DIR/hawking"
+# Check and advise on PATH
+case ":$PATH:" in
+    *":$BIN_DIR:"*) 
+        echo -e "${GREEN}**$BIN_DIR** is already in your PATH.${RESET}"
+        ;;
+    *)
+        echo -e "\n${YELLOW}To use commands globally, add this to your **~/.bashrc** or **~/.zshrc**:${RESET}"
+        echo -e "  ${BOLD}export PATH=\"\$HOME/.hawking/bin:\$PATH\"${RESET}"
+        ;;
+esac
 
-cp "$LOGIN_FILE" "$INSTALL_DIR/hawking-login"
-chmod +x "$INSTALL_DIR/hawking-login"
-
-cp "$AUTOUPDATE_SRC" "$INSTALL_DIR/hawking-update"
-chmod +x "$INSTALL_DIR/hawking-update"
-
-echo -e "${GREEN}${BOLD}✓ Installed hawking, hawking-login, and hawking-update to ${INSTALL_DIR}${RESET}"
-
-# Path export line
-PATH_LINE="export PATH=\"\$HOME/.hawking/bin:\$PATH\""
-
-# Update both Zsh and Bash configurations
-for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
-    touch "$rc" 2>/dev/null || true
-    if [ -f "$rc" ]; then
-        if grep -q "\.hawking/bin" "$rc" 2>/dev/null; then
-            echo -e "${GREEN}✓ PATH entry already exists in **${rc}**${RESET}"
-        else
-            echo "" >> "$rc"
-            echo "# Hawking CLI tool" >> "$rc"
-            echo "$PATH_LINE" >> "$rc"
-            echo -e "${GREEN}✓ Added **${INSTALL_DIR}** to PATH in **${rc}**${RESET}"
-        fi
-    fi
-done
-
-echo -e "\n${BOLD}Run this to reload your shell:${RESET}"
-echo -e "  source ~/.zshrc  (or source ~/.bashrc)"
-
-echo -e "\n${GREEN}${BOLD}Setup complete! You can now run:${RESET}"
-echo -e "  hawking [file_to_submit]"
+echo -e "\n${GREEN}${BOLD}Installation complete!${RESET}"
