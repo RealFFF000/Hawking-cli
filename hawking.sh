@@ -4,6 +4,7 @@ set -euo pipefail
 
 BASE_URL="https://hawking.computing.dcu.ie/hawking"
 COOKIE_FILE="$HOME/.hawking_cookie"
+USER_FILE="$HOME/.hawking_user"
 CACHE_FILE="$HOME/.hawking_history"
 SCRIPT_NAME="$(basename "$0")"
 
@@ -15,8 +16,10 @@ RESET="\033[0m"
 
 # ---- Parse Flags & Options ----
 DEBUG=false
+VOCAL=false
 CLEAR_CACHE=false
 SHOW_MODULES=false
+LOGOUT=false
 ADD_MODULE_ID=""
 ARGS=()
 
@@ -26,12 +29,20 @@ while [[ $# -gt 0 ]]; do
             DEBUG=true
             shift
             ;;
+        --vocal)
+            VOCAL=true
+            shift
+            ;;
         --clear-cache)
             CLEAR_CACHE=true
             shift
             ;;
         --modules)
             SHOW_MODULES=true
+            shift
+            ;;
+        --logout)
+            LOGOUT=true
             shift
             ;;
         --add-module)
@@ -44,6 +55,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ---- Handle --logout ----
+if [ "$LOGOUT" = true ]; then
+    rm -f "$COOKIE_FILE" "$USER_FILE"
+    echo -e "${GREEN}Successfully **logged out** and cleared default username.${RESET}"
+    exit 0
+fi
 
 # ---- Handle --clear-cache ----
 if [ "$CLEAR_CACHE" = true ]; then
@@ -99,13 +117,39 @@ save_cached_id() {
     mv "$temp_file" "$CACHE_FILE"
 }
 
-# ---- Cookie handling ----
+# ---- Connection & Cookie TTL Checks ----
+check_hawking_connection() {
+    if ! curl -s --head --connect-timeout 4 "$BASE_URL" >/dev/null 2>&1; then
+        echo -e "${RED}Error: **Cannot connect to Hawking**. The server may be down or unreachable.${RESET}"
+        exit 1
+    fi
+}
+
+is_cookie_expired() {
+    if [ ! -f "$COOKIE_FILE" ]; then
+        return 0
+    fi
+    local now
+    now=$(date +%s)
+    local mtime
+    mtime=$(stat -c %Y "$COOKIE_FILE" 2>/dev/null || stat -f %m "$COOKIE_FILE" 2>/dev/null || echo 0)
+    local age=$(( now - mtime ))
+    [ $age -gt 7200 ]
+}
+
 prompt_for_cookie() {
-    echo -e "${YELLOW}Session missing or invalid. **Triggering auto-login** via hawking-login...${RESET}"
+    check_hawking_connection
+    if [ "$VOCAL" = true ]; then
+        echo -e "${YELLOW}Session missing, expired, or invalid. **Triggering auto-login** via hawking-login...${RESET}"
+    fi
+    
+    local login_arg=""
+    [ "$VOCAL" = true ] && login_arg="--vocal"
+
     if command -v hawking-login &> /dev/null; then
-        hawking-login
+        hawking-login $login_arg
     elif [ -x "$HOME/.hawking/bin/hawking-login" ]; then
-        "$HOME/.hawking/bin/hawking-login"
+        "$HOME/.hawking/bin/hawking-login" $login_arg
     else
         echo -e "${RED}Error: hawking-login command **not found**.${RESET}"
         exit 1
@@ -117,7 +161,8 @@ prompt_for_cookie() {
     fi
 }
 
-if [ ! -f "$COOKIE_FILE" ]; then
+check_hawking_connection
+if [ ! -f "$COOKIE_FILE" ] || is_cookie_expired; then
     prompt_for_cookie
 fi
 
@@ -128,14 +173,14 @@ execute_upload() {
     local url="${BASE_URL}/${target_id}/fileUpload"
     local page_url="${BASE_URL}/${target_id}"
 
-    PAGE_HTML=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$page_url")
+    PAGE_HTML=$(curl -s -L --connect-timeout 5 -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$page_url")
     
     CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
     if [ -z "$CSRF_TOKEN" ]; then
-        CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'data-csrf-token="[^"]*"' | sed -E 's/.*data-csrf-token="([^"]*)".*/\1/' || true)
+        CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'data-csrf-token="[^"]*"' | sed -E 's/.*data-csrf-token="[^"]*"//' || true)
     fi
 
-    CURL_CMD=(curl -s -w "\n%{http_code}" -X POST "$url"
+    CURL_CMD=(curl -s --connect-timeout 5 -w "\n%{http_code}" -X POST "$url"
       -b "$COOKIE_FILE"
       -c "$COOKIE_FILE"
       -H "X-Requested-With: XMLHttpRequest"
@@ -177,11 +222,8 @@ if [ -z "$ASSIGNMENT_ID" ]; then
     ASSIGNMENT_ID=$(get_cached_ids | head -n 1 || true)
     if [ -z "$ASSIGNMENT_ID" ]; then
         echo -e "${RED}Error: **No module ID specified** and no cache history found.${RESET}"
-        echo -e "${YELLOW}Guidance:${RESET} Add a module ID manually using:"
+        echo -e "${YELLOW}Guidance:${RESET} Run ${BOLD}hawking-login${RESET} to auto-sync, or add manually using:"
         echo -e "  ${BOLD}$SCRIPT_NAME --add-module <YOUR_MODULE_ID>${RESET}"
-        echo -e "  *(Note: For a URL like ${BOLD}https://hawking.computing.dcu.ie/hawking/124${RESET}, the ID is ${BOLD}124${RESET})*"
-        echo -e "Or pass it directly as the first argument:"
-        echo -e "  ${BOLD}$SCRIPT_NAME <YOUR_MODULE_ID> [file_to_submit...]${RESET}"
         exit 1
     fi
 fi
@@ -191,7 +233,7 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-# ---- If no files provided, fall back to newest file ----
+# ---- File Selection ----
 IS_MULTI=false
 if [ ${#FILES[@]} -eq 0 ]; then
     NEWEST_FILE=$(ls -t 2>/dev/null | grep -v -E "^($SCRIPT_NAME|\..*)$" | head -n 1 || true)
@@ -200,7 +242,9 @@ if [ ${#FILES[@]} -eq 0 ]; then
         exit 1
     fi
     FILES=("$NEWEST_FILE")
-    echo -e "${YELLOW}Using **most recently modified file**: ${BOLD}${FILES[0]}${RESET}"
+    if [ "$VOCAL" = true ]; then
+        echo -e "${YELLOW}Using **most recently modified file**: ${BOLD}${FILES[0]}${RESET}"
+    fi
 elif [ ${#FILES[@]} -gt 1 ]; then
     IS_MULTI=true
 else
@@ -216,7 +260,7 @@ else
     fi
 fi
 
-if [ "$IS_MULTI" = false ]; then
+if [ "$IS_MULTI" = false ] && [ "$VOCAL" = true ]; then
     echo -e "${YELLOW}Using **cached module ID**: ${BOLD}${ASSIGNMENT_ID}${RESET}"
 fi
 
@@ -234,7 +278,7 @@ for FILE in "${FILES[@]}"; do
     [ -f "$FILE" ] || continue
     [ "$FILE" == "$SCRIPT_NAME" ] && continue
 
-    if [ "$IS_MULTI" = false ]; then
+    if [ "$IS_MULTI" = false ] && [ "$VOCAL" = true ]; then
         echo -e "${YELLOW}Uploading ${BOLD}${FILE}${RESET}${YELLOW} to assignment ${BOLD}${ASSIGNMENT_ID}${RESET}${YELLOW}...${RESET}"
     fi
 
@@ -244,53 +288,56 @@ for FILE in "${FILES[@]}"; do
 
     CURRENT_ASSIGNMENT_ID="$ASSIGNMENT_ID"
     if ! is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
-        if [ "$IS_MULTI" = false ]; then
-            echo -e "${YELLOW}Assignment ID '${CURRENT_ASSIGNMENT_ID}' **rejected the upload** or returned HTTP ${HTTP_CODE}. **Cycling through** all previously used IDs...${RESET}"
-        fi
-        FOUND_WORKING_ID=false
-        
-        while read -r cached_id; do
-            [ -z "$cached_id" ] && continue
-            [ "$cached_id" == "$CURRENT_ASSIGNMENT_ID" ] && continue
-            
-            if [ "$IS_MULTI" = false ]; then
-                echo -e "${YELLOW}Testing history ID: ${BOLD}${cached_id}${RESET}${YELLOW}...${RESET}"
+        if [ "$HTTP_CODE" -eq 401 ] || [ "$HTTP_CODE" -eq 403 ] || [ "$HTTP_CODE" -eq 302 ] || [ "$HTTP_CODE" -eq 301 ] || echo "$RESPONSE" | grep -qE '_username|login|Unauthorized|<html'; then
+            if [ "$VOCAL" = true ]; then
+                echo -e "${RED}Session expired or **invalid**. Re-authenticating...${RESET}"
             fi
-            RAW_RESPONSE=$(execute_upload "$cached_id" "$FILE")
+            check_hawking_connection
+            prompt_for_cookie
+            if [ "$VOCAL" = true ]; then
+                echo -e "${YELLOW}Retrying upload with **fresh session**...${RESET}"
+            fi
+            RAW_RESPONSE=$(execute_upload "$CURRENT_ASSIGNMENT_ID" "$FILE")
             HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
             RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
+        fi
+
+        if ! is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
+            if [ "$VOCAL" = true ]; then
+                echo -e "${YELLOW}Assignment ID '${CURRENT_ASSIGNMENT_ID}' rejected upload. **Cycling through** history...${RESET}"
+            fi
+            FOUND_WORKING_ID=false
             
-            if is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
-                CURRENT_ASSIGNMENT_ID="$cached_id"
-                FOUND_WORKING_ID=true
-                if [ "$IS_MULTI" = false ]; then
-                    echo -e "${GREEN}Successfully **switched to cached ID**: ${BOLD}${CURRENT_ASSIGNMENT_ID}${RESET}"
+            while read -r cached_id; do
+                [ -z "$cached_id" ] && continue
+                [ "$cached_id" == "$CURRENT_ASSIGNMENT_ID" ] && continue
+                
+                if [ "$VOCAL" = true ]; then
+                    echo -e "${YELLOW}Testing history ID: ${BOLD}${cached_id}${RESET}...${RESET}"
                 fi
-                break
-            fi
-        done < <(get_cached_ids)
+                RAW_RESPONSE=$(execute_upload "$cached_id" "$FILE")
+                HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
+                RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
+                
+                if is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
+                    CURRENT_ASSIGNMENT_ID="$cached_id"
+                    FOUND_WORKING_ID=true
+                    if [ "$VOCAL" = true ]; then
+                        echo -e "${GREEN}Successfully **switched to cached ID**: ${BOLD}${CURRENT_ASSIGNMENT_ID}${RESET}"
+                    fi
+                    break
+                fi
+            done < <(get_cached_ids)
 
-        if [ "$FOUND_WORKING_ID" = false ]; then
-            if [ "$IS_MULTI" = true ]; then
-                echo -e "${RED}${BOLD}✗ ${FILE}${RESET} — FAILED (Rejected)"
-            else
-                echo -e "${RED}All **cached assignment IDs failed** or rejected file: ${BOLD}${FILE}${RESET}"
+            if [ "$FOUND_WORKING_ID" = false ]; then
+                if [ "$IS_MULTI" = true ]; then
+                    echo -e "${RED}${BOLD}✗ ${FILE}${RESET} — FAILED (Rejected)"
+                else
+                    echo -e "${RED}All **cached assignment IDs failed** or rejected file: ${BOLD}${FILE}${RESET}"
+                fi
+                continue
             fi
-            continue
         fi
-    fi
-
-    if [ "$HTTP_CODE" -eq 401 ] || [ "$HTTP_CODE" -eq 403 ] || [ "$HTTP_CODE" -eq 302 ] || [ "$HTTP_CODE" -eq 301 ]; then
-        if [ "$IS_MULTI" = false ]; then
-            echo -e "${RED}Session expired or **unauthorized** (HTTP ${HTTP_CODE} redirect).${RESET}"
-        fi
-        prompt_for_cookie
-        if [ "$IS_MULTI" = false ]; then
-            echo -e "${YELLOW}Retrying upload with **fresh session**...${RESET}"
-        fi
-        RAW_RESPONSE=$(execute_upload "$CURRENT_ASSIGNMENT_ID" "$FILE")
-        HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
-        RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
     fi
 
     save_cached_id "$CURRENT_ASSIGNMENT_ID"
