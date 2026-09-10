@@ -476,7 +476,11 @@ for FILE in "${FILES[@]}"; do
             MULTIFILE_STATUS="✗ ${FILE} — (${PASSED_COUNT}/${TOTAL_COUNT})"
             MULTIFILE_ROW_COLOR="$RED"
         fi
-        printf "${CYAN}│${RESET} ${MULTIFILE_ROW_COLOR}${BOLD}%s${RESET}%*s ${CYAN}│${RESET}\n" "$MULTIFILE_STATUS" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
+        ATTEMPT_ID=$(echo "$RESPONSE" | jq -r '.attempt.id')
+        RESULT_URL="${BASE_URL}/${CURRENT_ASSIGNMENT_ID}/result/${ATTEMPT_ID}"
+        printf "${CYAN}│${RESET} "
+        printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\' "$RESULT_URL" "$MULTIFILE_ROW_COLOR$BOLD" "$MULTIFILE_STATUS" "$RESET"
+        printf "%*s ${CYAN}│${RESET}\n" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
     else
         SUBMITTER_USERNAME=$(echo "$RESPONSE" | jq -r '.attempt.submitterUsername // "unknown"')
         ATTEMPT_CONTENT_WIDTH=13
@@ -485,12 +489,16 @@ for FILE in "${FILES[@]}"; do
         [ $((13 + ${#FILE})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#FILE}))
         [ $((13 + ${#SUBMITTER_USERNAME})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#SUBMITTER_USERNAME}))
         ATTEMPT_TITLE_FILL=$((ATTEMPT_CONTENT_WIDTH - 13))
+        FILE_PATH="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
+        FILE_URL="file://${FILE_PATH// /%20}"
 
         echo -e "${BOLD}${CYAN}╭─ Attempt Info $(make_rule "$ATTEMPT_TITLE_FILL")╮${RESET}"
         printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "User:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$SUBMITTER_USERNAME"
         printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "Module ID:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$CURRENT_ASSIGNMENT_ID"
         printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "Module Code:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$MODULE_CODE"
-        printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "Filename:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$FILE"
+        printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}" "Filename:"
+        printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$FILE_URL" "$FILE"
+        printf "${RESET}%*s ${CYAN}│${RESET}\n" "$((ATTEMPT_CONTENT_WIDTH - 13 - ${#FILE}))" ""
         echo -e "${BOLD}${CYAN}╰$(make_rule "$((ATTEMPT_CONTENT_WIDTH + 2))")╯${RESET}"
 
                 TEST_ROWS=$(echo "$RESPONSE" | jq -r '
@@ -537,8 +545,11 @@ for FILE in "${FILES[@]}"; do
                 echo -e "${BOLD}${TEST_BORDER_COLOR}╭─ Test Results $(make_rule "$((TEST_CONTENT_WIDTH - 13))")╮${RESET}"
 
         ALL_PASSED=true
+        PASSED_TESTS=0
+        TOTAL_TESTS=0
 
         while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT STDERR RESULT_MESSAGE; do
+            TOTAL_TESTS=$((TOTAL_TESTS + 1))
             STDOUT=$(expand_tabs "$(printf '%b' "$STDOUT")")
             STDERR=$(expand_tabs "$(printf '%b' "$STDERR")")
             EXPECTED=$(decode_b64 "$EXPECTED_B64")
@@ -546,6 +557,7 @@ for FILE in "${FILES[@]}"; do
             RESULT_MESSAGE=$(expand_tabs "$(printf '%b' "$RESULT_MESSAGE")")
 
             if [ "$CORRECT" == "true" ]; then
+                PASSED_TESTS=$((PASSED_TESTS + 1))
                 TEST_STATUS="✓ PASSED — test ${TEST_ID} (${EXEC_TIME}ms)"
                 printf "${TEST_BORDER_COLOR}│${RESET} ${GREEN}${BOLD}%s${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$TEST_STATUS" "$((TEST_CONTENT_WIDTH - ${#TEST_STATUS} + 1))" ""
             else
@@ -625,21 +637,13 @@ for FILE in "${FILES[@]}"; do
             echo -e "${BOLD}${TEST_BORDER_COLOR}╰$(make_rule "$((TEST_CONTENT_WIDTH + 2))")╯${RESET}"
 
         if [ "$ALL_PASSED" = true ]; then
-            echo -e "${GREEN}${BOLD}🎉 All test cases passed successfully for ${FILE}! Great job!${RESET}"
-            if [ $((RANDOM % 100)) -eq 0 ]; then
-                UNAME=""
-                [ -f "$USER_FILE" ] && UNAME=$(cat "$USER_FILE" | tr -d '[:space:]')
-                FIRST_NAME="${UNAME%%.*}"
-                if [[ "${FIRST_NAME,,}" =~ a$ ]]; then
-                    echo -e "${GREEN}${BOLD}good girl${RESET}"
-                else
-                    echo -e "${GREEN}${BOLD}good boy${RESET}"
-                fi
-            fi
+            ATTEMPT_ID=$(echo "$RESPONSE" | jq -r '.attempt.id')
+            RESULT_URL="${BASE_URL}/${CURRENT_ASSIGNMENT_ID}/result/${ATTEMPT_ID}"
+            printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\\n' "$RESULT_URL" "$GREEN$BOLD" "✓ ${FILE} — (${PASSED_TESTS}/${TOTAL_TESTS})" "$RESET"
         else
             ATTEMPT_ID=$(echo "$RESPONSE" | jq -r '.attempt.id')
             RESULT_URL="${BASE_URL}/${CURRENT_ASSIGNMENT_ID}/result/${ATTEMPT_ID}"
-            printf '\033]8;;%s\033\\%s\033]8;;\033\\\n' "$RESULT_URL" "Open result"
+            printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\\n' "$RESULT_URL" "$RED$BOLD" "✗ ${FILE} — (${PASSED_TESTS}/${TOTAL_TESTS})" "$RESET"
         fi
     fi
 done
