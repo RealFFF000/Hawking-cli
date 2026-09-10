@@ -63,7 +63,7 @@ if [ -z "$PASSWORD" ]; then
     PROMPTED_PASSWORD=true
 else
     if [ "$VOCAL" = true ]; then
-        echo -e "${GREEN}Using **securely stored password** from system keychain.${RESET}"
+        echo -e "${GREEN}Using ${BOLD}securely stored password${RESET}${GREEN} from system keychain.${RESET}"
     fi
     PROMPTED_PASSWORD=false
 fi
@@ -78,7 +78,7 @@ INIT_RESPONSE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$LOGIN_URL")
 CSRF_TOKEN=$(echo "$INIT_RESPONSE" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
 
 if [ -z "$CSRF_TOKEN" ]; then
-    echo -e "${RED}Failed to extract **CSRF token** from login page.${RESET}"
+    echo -e "${RED}Failed to extract ${BOLD}CSRF token${RESET}${RED} from login page.${RESET}"
     exit 1
 fi
 
@@ -105,7 +105,7 @@ if [ "$HTTP_STATUS" -ne 302 ] && [ "$HTTP_STATUS" -ne 303 ]; then
 fi
 
 if echo "$LOCATION" | grep -qE "login\?error|/login$"; then
-    echo -e "${RED}Login failed: **Invalid credentials**.${RESET}"
+    echo -e "${RED}Login failed: ${BOLD}Invalid credentials${RESET}${RED}.${RESET}"
     exit 1
 fi
 
@@ -145,14 +145,14 @@ fi
 PORTAL_RESPONSE=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$TARGET_URL")
 
 if echo "$PORTAL_RESPONSE" | grep -q 'name="_username"'; then
-    echo -e "${RED}Login failed: **Session rejected** on post-login redirect.${RESET}"
+    echo -e "${RED}Login failed: ${BOLD}Session rejected${RESET}${RED} on post-login redirect.${RESET}"
     rm -f "$COOKIE_FILE"
     exit 1
 fi
 
 # 7. Scrape Module IDs safely from dashboard links
 if [ "$VOCAL" = true ]; then
-    echo -e "${YELLOW}Scraping active **module IDs** from dashboard...${RESET}"
+    echo -e "${YELLOW}Scraping active ${BOLD}module IDs${RESET}${YELLOW} from dashboard...${RESET}"
 fi
 DASHBOARD_HTML=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$BASE_URL")
 
@@ -166,7 +166,7 @@ if [ -n "$SCAPED_IDS" ]; then
     fi
     mv "$temp_file" "$CACHE_FILE"
     if [ "$VOCAL" = true ]; then
-        echo -e "${GREEN}Successfully **synced module IDs** to cache.${RESET}"
+        echo -e "${GREEN}Successfully ${BOLD}synced module IDs${RESET}${GREEN} to cache.${RESET}"
     fi
 fi
 

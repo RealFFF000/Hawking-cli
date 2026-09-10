@@ -19,29 +19,29 @@ mkdir -p "$BIN_DIR"
 if [ -f "hawking.sh" ]; then
     cp hawking.sh "$BIN_DIR/hawking"
     chmod +x "$BIN_DIR/hawking"
-    echo -e "${GREEN}Installed **hawking** command.${RESET}"
+    echo -e "${GREEN}Installed ${BOLD}hawking${RESET}${GREEN} command.${RESET}"
 else
-    echo -e "${YELLOW}Warning: hawking.sh **not found** in current directory.${RESET}"
+    echo -e "${YELLOW}Warning: hawking.sh ${BOLD}not found${RESET}${YELLOW} in current directory.${RESET}"
 fi
 
 # Copy login script if present
 if [ -f "hawking-login.sh" ]; then
     cp hawking-login.sh "$BIN_DIR/hawking-login"
     chmod +x "$BIN_DIR/hawking-login"
-    echo -e "${GREEN}Installed **hawking-login** command.${RESET}"
+    echo -e "${GREEN}Installed ${BOLD}hawking-login${RESET}${GREEN} command.${RESET}"
 fi
 
 # Preserve git repository context locally for the quiet weekly pull
 if [ -d ".git" ]; then
     rm -rf "$INSTALL_DIR/.git"
     cp -R .git "$INSTALL_DIR/" 2>/dev/null || true
-    echo -e "${GREEN}Preserved **git repository** for background updates.${RESET}"
+    echo -e "${GREEN}Preserved ${BOLD}git repository${RESET}${GREEN} for background updates.${RESET}"
 fi
 
 # Check and automatically add to PATH
 case ":$PATH:" in
     *":$BIN_DIR:"*) 
-        echo -e "${GREEN}**$BIN_DIR** is already in your PATH.${RESET}"
+        echo -e "${GREEN}${BOLD}$BIN_DIR${RESET}${GREEN} is already in your PATH.${RESET}"
         ;;
     *)
         PROFILE_FILE=""
@@ -57,9 +57,9 @@ case ":$PATH:" in
             PROFILE_FILE="$HOME/.profile"
         fi
 
-        echo -e "${YELLOW}Adding **$BIN_DIR** to your **$PROFILE_FILE**...${RESET}"
+        echo -e "${YELLOW}Adding ${BOLD}$BIN_DIR${RESET}${YELLOW} to your ${BOLD}$PROFILE_FILE${RESET}${YELLOW}...${RESET}"
         echo -e "\n# Added by Hawking CLI\nexport PATH=\"\$HOME/.hawking/bin:\$PATH\"" >> "$PROFILE_FILE"
-        echo -e "${GREEN}Successfully **updated PATH**. Run ${BOLD}source $PROFILE_FILE${RESET}${GREEN} or restart your terminal to apply.${RESET}"
+        echo -e "${GREEN}Successfully ${BOLD}updated PATH${RESET}${GREEN}. Run ${BOLD}source $PROFILE_FILE${RESET}${GREEN} or restart your terminal to apply.${RESET}"
         ;;
 esac
 

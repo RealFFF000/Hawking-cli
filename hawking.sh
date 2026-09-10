@@ -79,7 +79,7 @@ if [ "$SHOW_VERSION" = true ]; then
         git --no-pager -C "$HOME/.hawking" -c color.ui=always log -1 --pretty=format:"%C(cyan)%h%Creset - %C(green)%s%Creset %C(yellow)(%ar)%Creset [%an]" --date=relative 2>/dev/null || echo -e "${YELLOW}No commit history found.${RESET}"
         echo ""
     else
-        echo -e "${YELLOW}Hawking CLI (**Git repository context not found** in ~/.hawking)${RESET}"
+        echo -e "${YELLOW}Hawking CLI (${BOLD}Git repository context not found${RESET}${YELLOW} in ~/.hawking)${RESET}"
     fi
     exit 0
 fi
@@ -88,18 +88,18 @@ fi
 if [ "$FORCE_UPDATE" = true ]; then
     echo "$now" > "$UPDATE_CHECK_FILE"
     if [ -d "$HOME/.hawking/.git" ]; then
-        echo -e "${YELLOW}Forcing repository **update** (overriding local changes)...${RESET}"
+        echo -e "${YELLOW}Forcing repository ${BOLD}update${RESET}${YELLOW} (overriding local changes)...${RESET}"
         if git -C "$HOME/.hawking" fetch origin && git -C "$HOME/.hawking" reset --hard origin/main; then
             if [ -f "$HOME/.hawking/hawking.sh" ]; then
                 cp "$HOME/.hawking/hawking.sh" "$HOME/.hawking/bin/hawking"
                 chmod +x "$HOME/.hawking/bin/hawking"
             fi
-            echo -e "${GREEN}Successfully **updated** and re-installed Hawking CLI.${RESET}"
+            echo -e "${GREEN}Successfully ${BOLD}updated${RESET}${GREEN} and re-installed Hawking CLI.${RESET}"
         else
-            echo -e "${RED}Update **failed** (network issue). Cooldown reset.${RESET}"
+            echo -e "${RED}Update ${BOLD}failed${RESET}${RED} (network issue). Cooldown reset.${RESET}"
         fi
     else
-        echo -e "${YELLOW}No **git repository** found in ~/.hawking to update.${RESET}"
+        echo -e "${YELLOW}No ${BOLD}git repository${RESET}${YELLOW} found in ~/.hawking to update.${RESET}"
     fi
     exit 0
 fi
@@ -107,14 +107,14 @@ fi
 # ---- Handle --logout ----
 if [ "$LOGOUT" = true ]; then
     rm -f "$COOKIE_FILE" "$USER_FILE"
-    echo -e "${GREEN}Successfully **logged out** and cleared default username.${RESET}"
+    echo -e "${GREEN}Successfully ${BOLD}logged out${RESET}${GREEN} and cleared default username.${RESET}"
     exit 0
 fi
 
 # ---- Handle --clear-cache ----
 if [ "$CLEAR_CACHE" = true ]; then
     rm -f "$CACHE_FILE"
-    echo -e "${GREEN}Cache **cleared successfully**.${RESET}"
+    echo -e "${GREEN}Cache ${BOLD}cleared successfully${RESET}${GREEN}.${RESET}"
     exit 0
 fi
 
@@ -126,7 +126,7 @@ if [ "$SHOW_MODULES" = true ]; then
             echo -e "  - ${GREEN}${mid}${RESET}"
         done
     else
-        echo -e "${YELLOW}No **cached module IDs** found.${RESET}"
+        echo -e "${YELLOW}No ${BOLD}cached module IDs${RESET}${YELLOW} found.${RESET}"
     fi
     exit 0
 fi
@@ -134,7 +134,7 @@ fi
 # ---- Handle --add-module ----
 if [ -n "$ADD_MODULE_ID" ]; then
     if [[ ! "$ADD_MODULE_ID" =~ ^[0-9]+$ ]]; then
-        echo -e "${RED}Error: Module ID must be a **valid number**.${RESET}"
+        echo -e "${RED}Error: Module ID must be a ${BOLD}valid number${RESET}${RED}.${RESET}"
         exit 1
     fi
     temp_file=$(mktemp)
@@ -143,7 +143,7 @@ if [ -n "$ADD_MODULE_ID" ]; then
         grep -v "^${ADD_MODULE_ID}$" "$CACHE_FILE" >> "$temp_file" || true
     fi
     mv "$temp_file" "$CACHE_FILE"
-    echo -e "${GREEN}Successfully **added module ID** ${BOLD}${ADD_MODULE_ID}${RESET}${GREEN} to cache.${RESET}"
+    echo -e "${GREEN}Successfully ${BOLD}added module ID${RESET}${GREEN} ${BOLD}${ADD_MODULE_ID}${RESET}${GREEN} to cache.${RESET}"
     exit 0
 fi
 
@@ -191,7 +191,7 @@ save_cached_id() {
 # ---- Connection & Cookie TTL Checks ----
 check_hawking_connection() {
     if ! curl -s --head --connect-timeout 4 "$BASE_URL" >/dev/null 2>&1; then
-        echo -e "${RED}Error: **Cannot connect to Hawking**. The server may be down or unreachable.${RESET}"
+        echo -e "${RED}Error: ${BOLD}Cannot connect to Hawking${RESET}${RED}. The server may be down or unreachable.${RESET}"
         exit 1
     fi
 }
@@ -211,7 +211,7 @@ is_cookie_expired() {
 prompt_for_cookie() {
     check_hawking_connection
     if [ "$VOCAL" = true ]; then
-        echo -e "${YELLOW}Session missing, expired, or invalid. **Triggering auto-login** via hawking-login...${RESET}"
+        echo -e "${YELLOW}Session missing, expired, or invalid. ${BOLD}Triggering auto-login${RESET}${YELLOW} via hawking-login...${RESET}"
     fi
     
     local login_arg=""
@@ -222,12 +222,12 @@ prompt_for_cookie() {
     elif [ -x "$HOME/.hawking/bin/hawking-login" ]; then
         "$HOME/.hawking/bin/hawking-login" $login_arg
     else
-        echo -e "${RED}Error: hawking-login command **not found**.${RESET}"
+        echo -e "${RED}Error: hawking-login command ${BOLD}not found${RESET}${RED}.${RESET}"
         exit 1
     fi
 
     if [ ! -f "$COOKIE_FILE" ]; then
-        echo -e "${RED}Failed to acquire **valid session cookie**.${RESET}"
+        echo -e "${RED}Failed to acquire ${BOLD}valid session cookie${RESET}${RED}.${RESET}"
         exit 1
     fi
 }
@@ -295,7 +295,7 @@ fi
 if [ ${#FILES[@]} -gt 0 ]; then
     for f in "${FILES[@]}"; do
         if [ ! -f "$f" ]; then
-            echo -e "${RED}Error: **No such file exists**: ${BOLD}${f}${RESET}"
+            echo -e "${RED}Error: ${BOLD}No such file exists${RESET}${RED}: ${BOLD}${f}${RESET}"
             exit 1
         fi
     done
@@ -304,7 +304,7 @@ fi
 if [ -z "$ASSIGNMENT_ID" ]; then
     ASSIGNMENT_ID=$(get_cached_ids | head -n 1 || true)
     if [ -z "$ASSIGNMENT_ID" ]; then
-        echo -e "${RED}Error: **No module ID specified** and no cache history found.${RESET}"
+        echo -e "${RED}Error: ${BOLD}No module ID specified${RESET}${RED} and no cache history found.${RESET}"
         echo -e "${YELLOW}Guidance:${RESET} Run ${BOLD}hawking-login${RESET} to auto-sync, or add manually using:"
         echo -e "  ${BOLD}$SCRIPT_NAME --add-module <YOUR_MODULE_ID>${RESET}"
         exit 1
@@ -312,7 +312,7 @@ if [ -z "$ASSIGNMENT_ID" ]; then
 fi
 
 if ! command -v jq &> /dev/null; then
-    echo -e "${RED}jq is required but **not installed**.${RESET}"
+    echo -e "${RED}jq is required but ${BOLD}not installed${RESET}${RED}.${RESET}"
     exit 1
 fi
 
@@ -321,12 +321,12 @@ IS_MULTI=false
 if [ ${#FILES[@]} -eq 0 ]; then
     NEWEST_FILE=$(ls -t 2>/dev/null | grep -v -E "^($SCRIPT_NAME|\..*)$" | head -n 1 || true)
     if [ -z "$NEWEST_FILE" ]; then
-        echo -e "${RED}No **suitable file found** in current directory.${RESET}"
+        echo -e "${RED}No ${BOLD}suitable file found${RESET}${RED} in current directory.${RESET}"
         exit 1
     fi
     FILES=("$NEWEST_FILE")
     if [ "$VOCAL" = true ]; then
-        echo -e "${YELLOW}Using **most recently modified file**: ${BOLD}${FILES[0]}${RESET}"
+        echo -e "${YELLOW}Using ${BOLD}most recently modified file${RESET}${YELLOW}: ${BOLD}${FILES[0]}${RESET}"
     fi
 elif [ ${#FILES[@]} -gt 1 ]; then
     IS_MULTI=true
@@ -344,7 +344,7 @@ else
 fi
 
 if [ "$IS_MULTI" = false ] && [ "$VOCAL" = true ]; then
-    echo -e "${YELLOW}Using **cached module ID**: ${BOLD}${ASSIGNMENT_ID}${RESET}"
+    echo -e "${YELLOW}Using ${BOLD}cached module ID${RESET}${YELLOW}: ${BOLD}${ASSIGNMENT_ID}${RESET}"
 fi
 
 decode_b64() {
@@ -396,12 +396,12 @@ for FILE in "${FILES[@]}"; do
     if ! is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
         if [ "$HTTP_CODE" -eq 401 ] || [ "$HTTP_CODE" -eq 403 ] || [ "$HTTP_CODE" -eq 302 ] || [ "$HTTP_CODE" -eq 301 ] || echo "$RESPONSE" | grep -qE '_username|login|Unauthorized|<html'; then
             if [ "$VOCAL" = true ]; then
-                echo -e "${RED}Session expired or **invalid**. Re-authenticating...${RESET}"
+                echo -e "${RED}Session expired or ${BOLD}invalid${RESET}${RED}. Re-authenticating...${RESET}"
             fi
             check_hawking_connection
             prompt_for_cookie
             if [ "$VOCAL" = true ]; then
-                echo -e "${YELLOW}Retrying upload with **fresh session**...${RESET}"
+                echo -e "${YELLOW}Retrying upload with ${BOLD}fresh session${RESET}${YELLOW}...${RESET}"
             fi
             RAW_RESPONSE=$(execute_upload "$CURRENT_ASSIGNMENT_ID" "$FILE")
             MODULE_CODE=$(cat "$MODULE_CODE_FILE")
@@ -411,7 +411,7 @@ for FILE in "${FILES[@]}"; do
 
         if ! is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
             if [ "$VOCAL" = true ]; then
-                echo -e "${YELLOW}Assignment ID '${CURRENT_ASSIGNMENT_ID}' rejected upload. **Cycling through** history...${RESET}"
+                    echo -e "${YELLOW}Assignment ID '${CURRENT_ASSIGNMENT_ID}' rejected upload. ${BOLD}Cycling through${RESET}${YELLOW} history...${RESET}"
             fi
             FOUND_WORKING_ID=false
             
@@ -431,7 +431,7 @@ for FILE in "${FILES[@]}"; do
                     CURRENT_ASSIGNMENT_ID="$cached_id"
                     FOUND_WORKING_ID=true
                     if [ "$VOCAL" = true ]; then
-                        echo -e "${GREEN}Successfully **switched to cached ID**: ${BOLD}${CURRENT_ASSIGNMENT_ID}${RESET}"
+                        echo -e "${GREEN}Successfully ${BOLD}switched to cached ID${RESET}${GREEN}: ${BOLD}${CURRENT_ASSIGNMENT_ID}${RESET}"
                     fi
                     break
                 fi
@@ -442,7 +442,7 @@ for FILE in "${FILES[@]}"; do
                     MULTIFILE_STATUS="✗ ${FILE} — FAILED (Rejected)"
                     printf "${CYAN}│${RESET} ${RED}${BOLD}%s${RESET}%*s ${CYAN}│${RESET}\n" "$MULTIFILE_STATUS" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
                 else
-                    echo -e "${RED}All **cached assignment IDs failed** or rejected file: ${BOLD}${FILE}${RESET}"
+                    echo -e "${RED}All ${BOLD}cached assignment IDs failed${RESET}${RED} or rejected file: ${BOLD}${FILE}${RESET}"
                 fi
                 continue
             fi
