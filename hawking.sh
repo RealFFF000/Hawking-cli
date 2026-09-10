@@ -11,6 +11,8 @@ SCRIPT_NAME="$(basename "$0")"
 
 GREEN="\033[0;32m"
 RED="\033[0;31m"
+WHITE="\033[0;37m"
+BLUE="\033[0;34m"
 YELLOW="\033[0;33m"
 CYAN="\033[0;36m"
 BOLD="\033[1m"
@@ -243,6 +245,9 @@ execute_upload() {
     local page_url="${BASE_URL}/${target_id}"
 
     PAGE_HTML=$(curl -s -L --connect-timeout 5 -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$page_url")
+    MODULE_CODE=$(printf '%s' "$PAGE_HTML" | sed -nE 's/.*id="sidebarCourse">[[:space:]]*([^<[:space:]]+).*/\1/p' | head -n 1)
+    MODULE_CODE="${MODULE_CODE:-unknown}"
+    printf '%s' "$MODULE_CODE" > "$MODULE_CODE_FILE"
     
     CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
     if [ -z "$CSRF_TOKEN" ]; then
@@ -351,7 +356,29 @@ decode_b64() {
     echo "$input" | base64 --decode 2>/dev/null || echo "$input" | base64 -D 2>/dev/null || echo ""
 }
 
+make_rule() {
+    printf '%*s' "$1" '' | sed 's/ /─/g'
+}
+
+expand_tabs() {
+    printf '%s\n' "$1" | expand -t 8
+}
+
+MODULE_CODE_FILE=$(mktemp)
+trap 'rm -f "$MODULE_CODE_FILE"' EXIT
+
 # ---- Process Each File ----
+if [ "$IS_MULTI" = true ]; then
+    MULTIFILE_USER="unknown"
+    [ -f "$USER_FILE" ] && MULTIFILE_USER=$(tr -d '[:space:]' < "$USER_FILE")
+    MULTIFILE_TITLE="User: ${MULTIFILE_USER}"
+    MULTIFILE_WIDTH=$(printf '%s\n' "${FILES[@]}" | awk '{ status = "x " $0 " - (00/00)"; rejected = "x " $0 " - FAILED (Rejected)"; gsub(/[—✓✗]/, "x", status); if (length(status) > max) max = length(status); if (length(rejected) > max) max = length(rejected) } END { print max + 2 }')
+    [ ${#MULTIFILE_TITLE} -gt $((MULTIFILE_WIDTH - 3)) ] && MULTIFILE_WIDTH=$((${#MULTIFILE_TITLE} + 3))
+    MULTIFILE_TITLE_FILL=$((MULTIFILE_WIDTH - ${#MULTIFILE_TITLE} - 3))
+    [ "$MULTIFILE_TITLE_FILL" -lt 1 ] && MULTIFILE_TITLE_FILL=1
+    echo -e "${BOLD}${CYAN}╭─ ${MULTIFILE_TITLE} $(make_rule "$MULTIFILE_TITLE_FILL")╮${RESET}"
+fi
+
 for FILE in "${FILES[@]}"; do
     [ -f "$FILE" ] || continue
     [ "$FILE" == "$SCRIPT_NAME" ] && continue
@@ -361,6 +388,7 @@ for FILE in "${FILES[@]}"; do
     fi
 
     RAW_RESPONSE=$(execute_upload "$ASSIGNMENT_ID" "$FILE")
+    MODULE_CODE=$(cat "$MODULE_CODE_FILE")
     HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
     RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
 
@@ -376,6 +404,7 @@ for FILE in "${FILES[@]}"; do
                 echo -e "${YELLOW}Retrying upload with **fresh session**...${RESET}"
             fi
             RAW_RESPONSE=$(execute_upload "$CURRENT_ASSIGNMENT_ID" "$FILE")
+            MODULE_CODE=$(cat "$MODULE_CODE_FILE")
             HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
             RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
         fi
@@ -394,6 +423,7 @@ for FILE in "${FILES[@]}"; do
                     echo -e "${YELLOW}Testing history ID: ${BOLD}${cached_id}${RESET}...${RESET}"
                 fi
                 RAW_RESPONSE=$(execute_upload "$cached_id" "$FILE")
+                MODULE_CODE=$(cat "$MODULE_CODE_FILE")
                 HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
                 RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
                 
@@ -409,7 +439,8 @@ for FILE in "${FILES[@]}"; do
 
             if [ "$FOUND_WORKING_ID" = false ]; then
                 if [ "$IS_MULTI" = true ]; then
-                    echo -e "${RED}${BOLD}✗ ${FILE}${RESET} — FAILED (Rejected)"
+                    MULTIFILE_STATUS="✗ ${FILE} — FAILED (Rejected)"
+                    printf "${CYAN}│${RESET} ${RED}${BOLD}%s${RESET}%*s ${CYAN}│${RESET}\n" "$MULTIFILE_STATUS" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
                 else
                     echo -e "${RED}All **cached assignment IDs failed** or rejected file: ${BOLD}${FILE}${RESET}"
                 fi
@@ -439,33 +470,93 @@ for FILE in "${FILES[@]}"; do
         PASSED_COUNT="${PASSED_COUNT:-0}"
 
         if [ "$TOTAL_COUNT" -gt 0 ] && [ "$PASSED_COUNT" -eq "$TOTAL_COUNT" ]; then
-            echo -e "${GREEN}${BOLD}✓ ${FILE}${RESET} — (${PASSED_COUNT}/${TOTAL_COUNT})"
+            MULTIFILE_STATUS="✓ ${FILE} — (${PASSED_COUNT}/${TOTAL_COUNT})"
+            MULTIFILE_ROW_COLOR="$GREEN"
         else
-            echo -e "${RED}${BOLD}✗ ${FILE}${RESET} — (${PASSED_COUNT}/${TOTAL_COUNT})"
+            MULTIFILE_STATUS="✗ ${FILE} — (${PASSED_COUNT}/${TOTAL_COUNT})"
+            MULTIFILE_ROW_COLOR="$RED"
         fi
+        printf "${CYAN}│${RESET} ${MULTIFILE_ROW_COLOR}${BOLD}%s${RESET}%*s ${CYAN}│${RESET}\n" "$MULTIFILE_STATUS" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
     else
-        echo -e "${BOLD}=== Attempt Info ===${RESET}"
-        echo "$RESPONSE" | jq -r '
-          .attempt |
-          "ID: \(.id)\nAssignment: \(.assignmentId)\nSubmitter: \(.submitterUsername) (ID: \(.submitterId))\nTimestamp: \(.timestamp)\nSubmission Error: \(.submissionError // "none")"
-        '
+        SUBMITTER_USERNAME=$(echo "$RESPONSE" | jq -r '.attempt.submitterUsername // "unknown"')
+        ATTEMPT_CONTENT_WIDTH=13
+        [ $((13 + ${#CURRENT_ASSIGNMENT_ID})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#CURRENT_ASSIGNMENT_ID}))
+        [ $((13 + ${#MODULE_CODE})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#MODULE_CODE}))
+        [ $((13 + ${#FILE})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#FILE}))
+        [ $((13 + ${#SUBMITTER_USERNAME})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#SUBMITTER_USERNAME}))
+        ATTEMPT_TITLE_FILL=$((ATTEMPT_CONTENT_WIDTH - 13))
 
-        echo ""
-        echo -e "${BOLD}=== Test Results ===${RESET}"
+        echo -e "${BOLD}${CYAN}╭─ Attempt Info $(make_rule "$ATTEMPT_TITLE_FILL")╮${RESET}"
+        printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "User:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$SUBMITTER_USERNAME"
+        printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "Module ID:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$CURRENT_ASSIGNMENT_ID"
+        printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "Module Code:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$MODULE_CODE"
+        printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "Filename:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$FILE"
+        echo -e "${BOLD}${CYAN}╰$(make_rule "$((ATTEMPT_CONTENT_WIDTH + 2))")╯${RESET}"
+
+                TEST_ROWS=$(echo "$RESPONSE" | jq -r '
+                    .tests as $tests |
+                    .attempt.testResults[] |
+                    .testId as $tid |
+                    ($tests[$tid | tostring] // {}) as $tdef |
+                    [
+                        .testId,
+                        (.correct | tostring),
+                        (.execTimeMillis | tostring),
+                        ($tdef.testStdout // ""),
+                        (.stdout // ""),
+                        (.stderr // ""),
+                        (.testResultMessage // "")
+                    ] | @tsv
+                ')
+                TEST_CONTENT_WIDTH=$(echo "$RESPONSE" | jq -r '
+                    def detail: gsub("\n"; "\n    | ") | "    | " + .;
+                    .tests as $tests |
+                    .attempt.testResults[] as $result |
+                    ($tests[$result.testId | tostring] // {}) as $test |
+                    ($test.testStdout // "" | if . == "" then "" else @base64d end) as $expected |
+                    ($result.stdout // "") as $stdout |
+                    ($result.stderr // "") as $stderr |
+                    ($result.testResultMessage // "") as $message |
+                    (if $stdout != "" then $stdout elif $message != "" then $message else $stderr end) as $actual |
+                    [
+                        ("x PASSED - test " + ($result.testId | tostring) + " (" + ($result.execTimeMillis | tostring) + "ms)"),
+                        ("x FAILED - test " + ($result.testId | tostring) + " (" + ($result.execTimeMillis | tostring) + "ms)"),
+                        "  Expected:",
+                        "  Actual:  ",
+                        ($expected | detail),
+                        ($actual | detail),
+                        (if $stderr == "" then "" else ($stderr | detail) end)
+                    ][]
+                ' | expand -t 8 | awk '{ gsub(/[│✓✗—‘’]/, "x"); if (length > max) max = length } END { print max }')
+        TEST_CONTENT_WIDTH=${TEST_CONTENT_WIDTH:-20}
+                if echo "$RESPONSE" | jq -e '.attempt.testResults[] | select(.correct != true)' >/dev/null; then
+                    TEST_BORDER_COLOR="$RED"
+                else
+                    TEST_BORDER_COLOR="$GREEN"
+                fi
+                echo -e "${BOLD}${TEST_BORDER_COLOR}╭─ Test Results $(make_rule "$((TEST_CONTENT_WIDTH - 13))")╮${RESET}"
 
         ALL_PASSED=true
 
-        while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT STDERR; do
-            STDOUT=$(printf '%b' "$STDOUT")
+        while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT STDERR RESULT_MESSAGE; do
+            STDOUT=$(expand_tabs "$(printf '%b' "$STDOUT")")
+            STDERR=$(expand_tabs "$(printf '%b' "$STDERR")")
             EXPECTED=$(decode_b64 "$EXPECTED_B64")
+            EXPECTED=$(expand_tabs "$EXPECTED")
+            RESULT_MESSAGE=$(expand_tabs "$(printf '%b' "$RESULT_MESSAGE")")
 
             if [ "$CORRECT" == "true" ]; then
-                echo -e "${GREEN}${BOLD}✓ PASSED${RESET} — test ${TEST_ID} (${EXEC_TIME}ms)"
+                TEST_STATUS="✓ PASSED — test ${TEST_ID} (${EXEC_TIME}ms)"
+                printf "${TEST_BORDER_COLOR}│${RESET} ${GREEN}${BOLD}%s${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$TEST_STATUS" "$((TEST_CONTENT_WIDTH - ${#TEST_STATUS} + 1))" ""
             else
                 ALL_PASSED=false
-                echo -e "${RED}${BOLD}✗ FAILED${RESET} — test ${TEST_ID} (${EXEC_TIME}ms)"
+                TEST_STATUS="✗ FAILED — test ${TEST_ID} (${EXEC_TIME}ms)"
+                printf "${TEST_BORDER_COLOR}│${RESET} ${RED}${BOLD}%s${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$TEST_STATUS" "$((TEST_CONTENT_WIDTH - ${#TEST_STATUS} + 1))" ""
                 
                 ACT_CLEAN=$(printf '%s' "$STDOUT" | tr -d '\r')
+                if [ -z "$ACT_CLEAN" ]; then
+                    ACT_CLEAN=$(printf '%s' "${RESULT_MESSAGE:-$STDERR}" | tr -d '\r')
+                fi
                 EXP_CLEAN=$(printf '%s' "$EXPECTED" | tr -d '\r')
 
                 IS_MULTILINE=false
@@ -474,73 +565,66 @@ for FILE in "${FILES[@]}"; do
                 fi
 
                 if [ "$IS_MULTILINE" = true ]; then
-                    echo -e "  ${BOLD}Expected:${RESET}"
-                    printf '%s\n' "${EXP_CLEAN:-<empty>}" | awk '{print "    │ " $0}'
-                    echo -e "  ${BOLD}Actual:  ${RESET}"
-                    EXP_DATA="$EXP_CLEAN" ACT_DATA="$ACT_CLEAN" awk -v green="${GREEN}" -v red="${RED}" -v reset="${RESET}" '
+                    printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Expected:${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
+                    printf '%s\n' "${EXP_CLEAN:-<empty>}" | awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v reset="${RESET}" '{ line = "    | " $0; plain_line = line; gsub(/[‘’]/, "x", plain_line); padding = width - length(plain_line); printf "%s│%s     %s|%s %s%s %s│%s\n", border, reset, white, reset, $0, sprintf("%*s", padding, ""), border, reset }'
+                    printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Actual:  ${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
+                    EXP_DATA="$EXP_CLEAN" ACT_DATA="$ACT_CLEAN" awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v green="${GREEN}" -v red="${RED}" -v reset="${RESET}" '
                     BEGIN {
                         n_exp = split(ENVIRON["EXP_DATA"], exp_lines, "\n")
                         n_act = split(ENVIRON["ACT_DATA"], act_lines, "\n")
                         for (i = 1; i <= n_act; i++) {
                             line = act_lines[i]
+                            detail = "    | " line
+                            plain_detail = detail
+                            gsub(/[‘’]/, "x", plain_detail)
+                            padding = width - length(plain_detail)
                             if (i <= n_exp && line == exp_lines[i]) {
-                                print "    │ " green line reset
+                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, green, line, reset, sprintf("%*s", padding, ""), border, reset
                             } else {
-                                print "    │ " red line reset
+                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, red, line, reset, sprintf("%*s", padding, ""), border, reset
                             }
                         }
                     }'
                 else
-                    echo -e "  ${BOLD}Expected:${RESET} ${EXP_CLEAN:-<empty>}"
-                    printf "  ${BOLD}Actual:  ${RESET} "
+                    printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Expected:${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
+                    EXPECTED_DISPLAY="${EXP_CLEAN:-<empty>}"
+                    EXPECTED_PADDING=$((TEST_CONTENT_WIDTH - ${#EXPECTED_DISPLAY} - 6))
+                    [ "$EXPECTED_PADDING" -lt 0 ] && EXPECTED_PADDING=0
+                    printf "${TEST_BORDER_COLOR}│${RESET}     ${WHITE}|${RESET} %s%*s ${TEST_BORDER_COLOR}│${RESET}\n" "$EXPECTED_DISPLAY" "$EXPECTED_PADDING" ""
+                    printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Actual:  ${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
 
                     ACT_LEN=${#ACT_CLEAN}
                     EXP_LEN=${#EXP_CLEAN}
                     MAX_LEN=$ACT_LEN
                     [ $EXP_LEN -gt $MAX_LEN ] && MAX_LEN=$EXP_LEN
+                    ACTUAL_PADDING=$((TEST_CONTENT_WIDTH - ACT_LEN - 6))
+                    [ "$ACTUAL_PADDING" -lt 0 ] && ACTUAL_PADDING=0
 
-                    if [ $MAX_LEN -eq 0 ]; then
-                        printf "${RED}%s${RESET}\n" "$ACT_CLEAN"
-                    else
-                        for (( i=0; i<MAX_LEN; i++ )); do
-                            CHAR_ACT="${ACT_CLEAN:$i:1}"
-                            CHAR_EXP="${EXP_CLEAN:$i:1}"
+                    printf "${TEST_BORDER_COLOR}│${RESET}     ${WHITE}|${RESET} "
+                    for (( i=0; i<MAX_LEN; i++ )); do
+                        CHAR_ACT="${ACT_CLEAN:$i:1}"
+                        CHAR_EXP="${EXP_CLEAN:$i:1}"
 
-                            if [ "$CHAR_ACT" == "$CHAR_EXP" ] && [ -n "$CHAR_ACT" ]; then
-                                printf "%s" "$CHAR_ACT"
-                            else
-                                PRINT_CHAR="${CHAR_ACT:- }"
-                                printf "${RED}%s${RESET}" "$PRINT_CHAR"
-                            fi
-                        done
-                        printf "\n"
-                    fi
+                        if [ "$CHAR_ACT" == "$CHAR_EXP" ] && [ -n "$CHAR_ACT" ]; then
+                            printf "%s" "$CHAR_ACT"
+                        else
+                            PRINT_CHAR="${CHAR_ACT:- }"
+                            printf "${RED}%s${RESET}" "$PRINT_CHAR"
+                        fi
+                    done
+                    printf "%*s ${TEST_BORDER_COLOR}│${RESET}\n" "$ACTUAL_PADDING" ""
                 fi
             fi
 
             if [ -n "$STDERR" ]; then
-                echo -e "  ${RED}${BOLD}Stderr:  ${RESET}"
-                printf '%s\n' "$(printf '%b' "$STDERR" | tr -d '\r')" | awk '{print "    │ " $0}'
+                printf "${TEST_BORDER_COLOR}│${RESET}  ${RED}${BOLD}Stderr:  ${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
+                printf '%s\n' "$(printf '%s' "$STDERR" | tr -d '\r')" | awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v reset="${RESET}" '{ line = "    | " $0; plain_line = line; gsub(/[‘’]/, "x", plain_line); padding = width - length(plain_line); printf "%s│%s     %s|%s %s%s %s│%s\n", border, reset, white, reset, $0, sprintf("%*s", padding, ""), border, reset }'
             fi
-            echo ""
+                done <<< "$TEST_ROWS"
 
-        done < <(echo "$RESPONSE" | jq -r '
-          .tests as $tests |
-          .attempt.testResults[] |
-          .testId as $tid |
-          ($tests[$tid | tostring] // {}) as $tdef |
-          [
-            .testId,
-            (.correct | tostring),
-            (.execTimeMillis | tostring),
-            ($tdef.testStdout // ""),
-            (.stdout // ""),
-            (.stderr // "")
-          ] | @tsv
-        ')
+            echo -e "${BOLD}${TEST_BORDER_COLOR}╰$(make_rule "$((TEST_CONTENT_WIDTH + 2))")╯${RESET}"
 
         if [ "$ALL_PASSED" = true ]; then
-            echo ""
             echo -e "${GREEN}${BOLD}🎉 All test cases passed successfully for ${FILE}! Great job!${RESET}"
             if [ $((RANDOM % 100)) -eq 0 ]; then
                 UNAME=""
@@ -552,8 +636,14 @@ for FILE in "${FILES[@]}"; do
                     echo -e "${GREEN}${BOLD}good boy${RESET}"
                 fi
             fi
+        else
+            ATTEMPT_ID=$(echo "$RESPONSE" | jq -r '.attempt.id')
+            RESULT_URL="${BASE_URL}/${CURRENT_ASSIGNMENT_ID}/result/${ATTEMPT_ID}"
+            printf '\033]8;;%s\033\\%s\033]8;;\033\\\n' "$RESULT_URL" "Open result"
         fi
     fi
 done
 
-echo ""
+if [ "$IS_MULTI" = true ]; then
+    echo -e "${BOLD}${CYAN}╰$(make_rule "$MULTIFILE_WIDTH")╯${RESET}"
+fi
