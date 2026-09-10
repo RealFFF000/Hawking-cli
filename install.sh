@@ -25,8 +25,8 @@ else
 fi
 
 # Copy login script if present
-if [ -f "hawking-login" ]; then
-    cp hawking-login "$BIN_DIR/hawking-login"
+if [ -f "hawking-login.sh" ]; then
+    cp hawking-login.sh "$BIN_DIR/hawking-login"
     chmod +x "$BIN_DIR/hawking-login"
     echo -e "${GREEN}Installed **hawking-login** command.${RESET}"
 fi
