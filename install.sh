@@ -38,14 +38,28 @@ if [ -d ".git" ]; then
     echo -e "${GREEN}Preserved **git repository** for background updates.${RESET}"
 fi
 
-# Check and advise on PATH
+# Check and automatically add to PATH
 case ":$PATH:" in
     *":$BIN_DIR:"*) 
         echo -e "${GREEN}**$BIN_DIR** is already in your PATH.${RESET}"
         ;;
     *)
-        echo -e "\n${YELLOW}To use commands globally, add this to your **~/.bashrc** or **~/.zshrc**:${RESET}"
-        echo -e "  ${BOLD}export PATH=\"\$HOME/.hawking/bin:\$PATH\"${RESET}"
+        PROFILE_FILE=""
+        if [[ "$SHELL" == */zsh ]]; then
+            PROFILE_FILE="$HOME/.zshrc"
+        elif [[ "$SHELL" == */bash ]]; then
+            if [ -f "$HOME/.bash_profile" ]; then
+                PROFILE_FILE="$HOME/.bash_profile"
+            else
+                PROFILE_FILE="$HOME/.bashrc"
+            fi
+        else
+            PROFILE_FILE="$HOME/.profile"
+        fi
+
+        echo -e "${YELLOW}Adding **$BIN_DIR** to your **$PROFILE_FILE**...${RESET}"
+        echo -e "\n# Added by Hawking CLI\nexport PATH=\"\$HOME/.hawking/bin:\$PATH\"" >> "$PROFILE_FILE"
+        echo -e "${GREEN}Successfully **updated PATH**. Run ${BOLD}source $PROFILE_FILE${RESET}${GREEN} or restart your terminal to apply.${RESET}"
         ;;
 esac
 
