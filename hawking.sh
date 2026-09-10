@@ -361,7 +361,7 @@ make_rule() {
 }
 
 expand_tabs() {
-    printf '%s\n' "$1" | expand -t 8
+    printf '%s\n' "$1" | LC_ALL=C expand -t 8
 }
 
 MODULE_CODE_FILE=$(mktemp)
@@ -527,7 +527,7 @@ for FILE in "${FILES[@]}"; do
                         ($actual | detail),
                         (if $stderr == "" then "" else ($stderr | detail) end)
                     ][]
-                ' | expand -t 8 | awk '{ gsub(/[│✓✗—‘’]/, "x"); if (length > max) max = length } END { print max }')
+                ' | LC_ALL=C expand -t 8 | awk '{ gsub(/[│✓✗—‘’]/, "x"); if (length > max) max = length } END { print max }')
         TEST_CONTENT_WIDTH=${TEST_CONTENT_WIDTH:-20}
                 if echo "$RESPONSE" | jq -e '.attempt.testResults[] | select(.correct != true)' >/dev/null; then
                     TEST_BORDER_COLOR="$RED"
