@@ -361,6 +361,12 @@ decode_b64() {
     echo "$input" | base64 --decode 2>/dev/null || echo "$input" | base64 -D 2>/dev/null || echo ""
 }
 
+decode_field() {
+    local decoded
+    decoded=$(decode_b64 "$1")
+    printf '%s' "${decoded#x}"
+}
+
 open_runners() {
     local response="$1"
     local runner_dir
@@ -557,10 +563,10 @@ for FILE in "${FILES[@]}"; do
                         .testId,
                         (.correct | tostring),
                         (.execTimeMillis | tostring),
-                        ($tdef.testStdout // ""),
-                        (.stdout // ""),
-                        (.stderr // ""),
-                        (.testResultMessage // "")
+                        (("x" + ($tdef.testStdout // "")) | @base64),
+                        (("x" + (.stdout // "")) | @base64),
+                        (("x" + (.stderr // "")) | @base64),
+                        (("x" + (.testResultMessage // "")) | @base64)
                     ] | @tsv
                 ')
                 TEST_CONTENT_WIDTH=$(echo "$RESPONSE" | jq -r '
@@ -595,13 +601,13 @@ for FILE in "${FILES[@]}"; do
         PASSED_TESTS=0
         TOTAL_TESTS=0
 
-        while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT STDERR RESULT_MESSAGE; do
+        while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT_B64 STDERR_B64 RESULT_MESSAGE_B64; do
             TOTAL_TESTS=$((TOTAL_TESTS + 1))
-            STDOUT=$(expand_tabs "$(printf '%b' "$STDOUT")")
-            STDERR=$(expand_tabs "$(printf '%b' "$STDERR")")
-            EXPECTED=$(decode_b64 "$EXPECTED_B64")
+            STDOUT=$(expand_tabs "$(decode_field "$STDOUT_B64")")
+            STDERR=$(expand_tabs "$(decode_field "$STDERR_B64")")
+            EXPECTED=$(decode_b64 "$(decode_field "$EXPECTED_B64")")
             EXPECTED=$(expand_tabs "$EXPECTED")
-            RESULT_MESSAGE=$(expand_tabs "$(printf '%b' "$RESULT_MESSAGE")")
+            RESULT_MESSAGE=$(expand_tabs "$(decode_field "$RESULT_MESSAGE_B64")")
 
             if [ "$CORRECT" == "true" ]; then
                 PASSED_TESTS=$((PASSED_TESTS + 1))
@@ -613,17 +619,15 @@ for FILE in "${FILES[@]}"; do
                 printf "${TEST_BORDER_COLOR}│${RESET} ${RED}${BOLD}%s${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$TEST_STATUS" "$((TEST_CONTENT_WIDTH - ${#TEST_STATUS} + 1))" ""
                 
                 ACT_CLEAN=$(printf '%s' "$STDOUT" | tr -d '\r')
-                if [ -z "$ACT_CLEAN" ]; then
-                    ACT_CLEAN=$(printf '%s' "${RESULT_MESSAGE:-$STDERR}" | tr -d '\r')
-                fi
                 EXP_CLEAN=$(printf '%s' "$EXPECTED" | tr -d '\r')
 
-                IS_MULTILINE=false
-                if [[ "$ACT_CLEAN" == *$'\n'* ]] || [[ "$EXP_CLEAN" == *$'\n'* ]]; then
-                    IS_MULTILINE=true
-                fi
+                if [ "$ACT_CLEAN" != "$EXP_CLEAN" ]; then
+                    IS_MULTILINE=false
+                    if [[ "$ACT_CLEAN" == *$'\n'* ]] || [[ "$EXP_CLEAN" == *$'\n'* ]]; then
+                        IS_MULTILINE=true
+                    fi
 
-                if [ "$IS_MULTILINE" = true ]; then
+                    if [ "$IS_MULTILINE" = true ]; then
                     printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Expected:${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
                     printf '%s\n' "${EXP_CLEAN:-<empty>}" | awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v reset="${RESET}" '{ line = "    | " $0; plain_line = line; gsub(/[‘’]/, "x", plain_line); padding = width - length(plain_line); printf "%s│%s     %s|%s %s%s %s│%s\n", border, reset, white, reset, $0, sprintf("%*s", padding, ""), border, reset }'
                     printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Actual:  ${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
@@ -631,20 +635,25 @@ for FILE in "${FILES[@]}"; do
                     BEGIN {
                         n_exp = split(ENVIRON["EXP_DATA"], exp_lines, "\n")
                         n_act = split(ENVIRON["ACT_DATA"], act_lines, "\n")
+                        if (ENVIRON["ACT_DATA"] == "") {
+                            n_act = 1
+                            act_lines[1] = ""
+                        }
                         for (i = 1; i <= n_act; i++) {
                             line = act_lines[i]
-                            detail = "    | " line
-                            plain_detail = detail
-                            gsub(/[‘’]/, "x", plain_detail)
-                            padding = width - length(plain_detail)
+                            display_line = (line == "" ? "<empty>" : line)
+                            display_detail = "    | " display_line
+                            plain_display_detail = display_detail
+                            gsub(/[‘’]/, "x", plain_display_detail)
+                            padding = width - length(plain_display_detail)
                             if (i <= n_exp && line == exp_lines[i]) {
-                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, green, line, reset, sprintf("%*s", padding, ""), border, reset
+                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, green, display_line, reset, sprintf("%*s", padding, ""), border, reset
                             } else {
-                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, red, line, reset, sprintf("%*s", padding, ""), border, reset
+                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, red, display_line, reset, sprintf("%*s", padding, ""), border, reset
                             }
                         }
                     }'
-                else
+                    else
                     printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Expected:${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
                     EXPECTED_DISPLAY="${EXP_CLEAN:-<empty>}"
                     EXPECTED_PADDING=$((TEST_CONTENT_WIDTH - ${#EXPECTED_DISPLAY} - 6))
@@ -660,19 +669,32 @@ for FILE in "${FILES[@]}"; do
                     [ "$ACTUAL_PADDING" -lt 0 ] && ACTUAL_PADDING=0
 
                     printf "${TEST_BORDER_COLOR}│${RESET}     ${WHITE}|${RESET} "
-                    for (( i=0; i<MAX_LEN; i++ )); do
-                        CHAR_ACT="${ACT_CLEAN:$i:1}"
-                        CHAR_EXP="${EXP_CLEAN:$i:1}"
+                    if [ "$ACT_LEN" -eq 0 ]; then
+                        ACTUAL_DISPLAY="<empty>"
+                        ACTUAL_PADDING=$((TEST_CONTENT_WIDTH - ${#ACTUAL_DISPLAY} - 6))
+                        [ "$ACTUAL_PADDING" -lt 0 ] && ACTUAL_PADDING=0
+                        printf "${RED}%s${RESET}" "$ACTUAL_DISPLAY"
+                    else
+                        for (( i=0; i<MAX_LEN; i++ )); do
+                            CHAR_ACT="${ACT_CLEAN:$i:1}"
+                            CHAR_EXP="${EXP_CLEAN:$i:1}"
 
-                        if [ "$CHAR_ACT" == "$CHAR_EXP" ] && [ -n "$CHAR_ACT" ]; then
-                            printf "%s" "$CHAR_ACT"
-                        else
-                            PRINT_CHAR="${CHAR_ACT:- }"
-                            printf "${RED}%s${RESET}" "$PRINT_CHAR"
-                        fi
-                    done
+                            if [ "$CHAR_ACT" == "$CHAR_EXP" ] && [ -n "$CHAR_ACT" ]; then
+                                printf "%s" "$CHAR_ACT"
+                            else
+                                PRINT_CHAR="${CHAR_ACT:- }"
+                                printf "${RED}%s${RESET}" "$PRINT_CHAR"
+                            fi
+                        done
+                    fi
                     printf "%*s ${TEST_BORDER_COLOR}│${RESET}\n" "$ACTUAL_PADDING" ""
+                    fi
                 fi
+            fi
+
+            if [ -n "$RESULT_MESSAGE" ]; then
+                printf "${TEST_BORDER_COLOR}│${RESET}  ${RED}${BOLD}Stderr:  ${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
+                printf '%s\n' "$(printf '%s' "$RESULT_MESSAGE" | tr -d '\r')" | awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v reset="${RESET}" '{ line = "    | " $0; plain_line = line; gsub(/[‘’]/, "x", plain_line); padding = width - length(plain_line); if (padding < 0) padding = 0; printf "%s│%s     %s|%s %s%s %s│%s\n", border, reset, white, reset, $0, sprintf("%*s", padding, ""), border, reset }'
             fi
 
             if [ -n "$STDERR" ]; then
