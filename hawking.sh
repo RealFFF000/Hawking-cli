@@ -368,41 +368,61 @@ decode_field() {
 }
 
 open_runners() {
-    local response="$1"
-    local runner_dir
-    local runner_file
-    local test_id
-    local test_filename
-    local runner_files=()
-
     if ! command -v nvim &> /dev/null; then
         echo -e "${RED}Error: ${BOLD}nvim is required${RESET}${RED} for --runner.${RESET}"
         return 1
     fi
 
-    runner_dir=$(mktemp -d)
-    while IFS=$'\t' read -r test_id test_filename; do
-        [ -n "$test_id" ] || continue
-        test_filename=$(basename "${test_filename:-runner.py}")
-        runner_file="${runner_dir}/${test_id}-${test_filename}"
-        printf '%s\n' "$response" | jq -r --arg test_id "$test_id" '.tests[$test_id].testCode' > "$runner_file"
-        runner_files+=("$runner_file")
-    done < <(printf '%s\n' "$response" | jq -r '.tests // {} | to_entries[] | select(.value.testCode? != null and .value.testCode != "") | [.key, (.value.testCodeFilename // "runner.py")] | @tsv')
-
-    if [ ${#runner_files[@]} -eq 0 ]; then
-        rm -rf "$runner_dir"
+    if [ ${#RUNNER_FILES[@]} -eq 0 ]; then
         echo -e "${YELLOW}No ${BOLD}runner source${RESET}${YELLOW} was included in the response.${RESET}"
         return 0
     fi
 
-    if nvim -p "${runner_files[@]}"; then
+    if nvim -p "${RUNNER_FILES[@]}"; then
         :
     else
         local nvim_status=$?
-        rm -rf "$runner_dir"
+        rm -rf "$RUNNER_DIR"
+        RUNNER_DIR=""
+        RUNNER_FILES=()
         return "$nvim_status"
     fi
-    rm -rf "$runner_dir"
+    rm -rf "$RUNNER_DIR"
+    RUNNER_DIR=""
+    RUNNER_FILES=()
+}
+
+prepare_runner_files() {
+    local response="$1"
+    local test_id
+    local test_filename
+    local runner_file
+
+    RUNNER_DIR=""
+    RUNNER_FILES=()
+    RUNNER_LINK_FILE=""
+
+    while IFS=$'\t' read -r test_id test_filename; do
+        [ -n "$test_id" ] || continue
+        [ -n "$RUNNER_DIR" ] || RUNNER_DIR=$(mktemp -d)
+        test_filename=$(basename "${test_filename:-runner.py}")
+        runner_file="${RUNNER_DIR}/${test_id}-${test_filename}"
+        printf '%s\n' "$response" | jq -r --arg test_id "$test_id" '.tests[$test_id].testCode' > "$runner_file"
+        RUNNER_FILES+=("$runner_file")
+        if [ -z "$RUNNER_LINK_FILE" ]; then
+            RUNNER_LINK_FILE="${RUNNER_DIR}/runners.py"
+            : > "$RUNNER_LINK_FILE"
+        fi
+        printf '\n# ===== Runner %s (%s) =====\n\n' "$test_id" "$test_filename" >> "$RUNNER_LINK_FILE"
+        cat "$runner_file" >> "$RUNNER_LINK_FILE"
+        printf '\n' >> "$RUNNER_LINK_FILE"
+    done < <(printf '%s\n' "$response" | jq -r '.tests // {} | to_entries[] | select(.value.testCode? != null and .value.testCode != "") | [.key, (.value.testCodeFilename // "runner.py")] | @tsv')
+}
+
+print_runner_link() {
+    [ -n "$RUNNER_LINK_FILE" ] || return 0
+    local runner_url="file://${RUNNER_LINK_FILE// /%20}"
+    printf '\033]8;;%s\033\\%b↗ see runners%b\033]8;;\033\\' "$runner_url" "$BLUE" "$RESET"
 }
 
 make_rule() {
@@ -415,6 +435,9 @@ expand_tabs() {
 
 MODULE_CODE_FILE=$(mktemp)
 trap 'rm -f "$MODULE_CODE_FILE"' EXIT
+RUNNER_DIR=""
+RUNNER_LINK_FILE=""
+RUNNER_FILES=()
 
 # ---- Process Each File ----
 if [ "$IS_MULTI" = true ]; then
@@ -422,10 +445,11 @@ if [ "$IS_MULTI" = true ]; then
     [ -f "$USER_FILE" ] && MULTIFILE_USER=$(tr -d '[:space:]' < "$USER_FILE")
     MULTIFILE_TITLE="User: ${MULTIFILE_USER}"
     MULTIFILE_WIDTH=$(printf '%s\n' "${FILES[@]}" | awk '{ status = "x " $0 " - (00/00)"; rejected = "x " $0 " - FAILED (Rejected)"; gsub(/[—✓✗]/, "x", status); if (length(status) > max) max = length(status); if (length(rejected) > max) max = length(rejected) } END { print max + 2 }')
-    [ ${#MULTIFILE_TITLE} -gt $((MULTIFILE_WIDTH - 3)) ] && MULTIFILE_WIDTH=$((${#MULTIFILE_TITLE} + 3))
-    MULTIFILE_TITLE_FILL=$((MULTIFILE_WIDTH - ${#MULTIFILE_TITLE} - 3))
-    [ "$MULTIFILE_TITLE_FILL" -lt 1 ] && MULTIFILE_TITLE_FILL=1
-    echo -e "${BOLD}${CYAN}╭─ ${MULTIFILE_TITLE} $(make_rule "$MULTIFILE_TITLE_FILL")╮${RESET}"
+    MULTIFILE_HAS_RUNNER=false
+    MULTIFILE_STATUSES=()
+    MULTIFILE_ROW_COLORS=()
+    MULTIFILE_RESULT_URLS=()
+    MULTIFILE_RUNNER_FILES=()
 fi
 
 for FILE in "${FILES[@]}"; do
@@ -489,7 +513,10 @@ for FILE in "${FILES[@]}"; do
             if [ "$FOUND_WORKING_ID" = false ]; then
                 if [ "$IS_MULTI" = true ]; then
                     MULTIFILE_STATUS="✗ ${FILE} — FAILED (Rejected)"
-                    printf "${CYAN}│${RESET} ${RED}${BOLD}%s${RESET}%*s ${CYAN}│${RESET}\n" "$MULTIFILE_STATUS" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
+                    MULTIFILE_STATUSES+=("$MULTIFILE_STATUS")
+                    MULTIFILE_ROW_COLORS+=("$RED$BOLD")
+                    MULTIFILE_RESULT_URLS+=("")
+                    MULTIFILE_RUNNER_FILES+=("")
                 else
                     echo -e "${RED}All ${BOLD}cached assignment IDs failed${RESET}${RED} or rejected file: ${BOLD}${FILE}${RESET}"
                 fi
@@ -504,6 +531,8 @@ for FILE in "${FILES[@]}"; do
         echo -e "${BOLD}=== Full JSON Response (Debug) ===${RESET}"
         echo "$RESPONSE" | jq .
     fi
+
+    prepare_runner_files "$RESPONSE"
 
     if [ "$SHOW_RUNNER" = true ]; then
         open_runners "$RESPONSE"
@@ -531,9 +560,11 @@ for FILE in "${FILES[@]}"; do
         fi
         ATTEMPT_ID=$(echo "$RESPONSE" | jq -r '.attempt.id')
         RESULT_URL="${BASE_URL}/${CURRENT_ASSIGNMENT_ID}/result/${ATTEMPT_ID}"
-        printf "${CYAN}│${RESET} "
-        printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\' "$RESULT_URL" "$MULTIFILE_ROW_COLOR$BOLD" "$MULTIFILE_STATUS" "$RESET"
-        printf "%*s ${CYAN}│${RESET}\n" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
+        MULTIFILE_STATUSES+=("$MULTIFILE_STATUS")
+        MULTIFILE_ROW_COLORS+=("$MULTIFILE_ROW_COLOR$BOLD")
+        MULTIFILE_RESULT_URLS+=("$RESULT_URL")
+        MULTIFILE_RUNNER_FILES+=("$RUNNER_LINK_FILE")
+        [ -n "$RUNNER_LINK_FILE" ] && MULTIFILE_HAS_RUNNER=true
     else
         SUBMITTER_USERNAME=$(echo "$RESPONSE" | jq -r '.attempt.submitterUsername // "unknown"')
         ATTEMPT_CONTENT_WIDTH=13
@@ -708,15 +739,58 @@ for FILE in "${FILES[@]}"; do
         if [ "$ALL_PASSED" = true ]; then
             ATTEMPT_ID=$(echo "$RESPONSE" | jq -r '.attempt.id')
             RESULT_URL="${BASE_URL}/${CURRENT_ASSIGNMENT_ID}/result/${ATTEMPT_ID}"
-            printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\\n' "$RESULT_URL" "$GREEN$BOLD" "✓ ${FILE} — (${PASSED_TESTS}/${TOTAL_TESTS})" "$RESET"
+            printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\' "$RESULT_URL" "$GREEN$BOLD" "✓ ${FILE} — (${PASSED_TESTS}/${TOTAL_TESTS})" "$RESET"
+            printf '\n'
+            if [ -n "$RUNNER_LINK_FILE" ]; then
+                print_runner_link
+                printf '\n'
+            fi
         else
             ATTEMPT_ID=$(echo "$RESPONSE" | jq -r '.attempt.id')
             RESULT_URL="${BASE_URL}/${CURRENT_ASSIGNMENT_ID}/result/${ATTEMPT_ID}"
-            printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\\n' "$RESULT_URL" "$RED$BOLD" "✗ ${FILE} — (${PASSED_TESTS}/${TOTAL_TESTS})" "$RESET"
+            printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\' "$RESULT_URL" "$RED$BOLD" "✗ ${FILE} — (${PASSED_TESTS}/${TOTAL_TESTS})" "$RESET"
+            printf '\n'
+            if [ -n "$RUNNER_LINK_FILE" ]; then
+                print_runner_link
+                printf '\n'
+            fi
         fi
     fi
 done
 
 if [ "$IS_MULTI" = true ]; then
+    if [ "$MULTIFILE_HAS_RUNNER" = true ]; then
+        for index in "${!MULTIFILE_STATUSES[@]}"; do
+            if [ -n "${MULTIFILE_RUNNER_FILES[$index]}" ] && [ $(( ${#MULTIFILE_STATUSES[$index]} + 16 )) -gt "$MULTIFILE_WIDTH" ]; then
+                MULTIFILE_WIDTH=$(( ${#MULTIFILE_STATUSES[$index]} + 16 ))
+            fi
+        done
+    fi
+    [ ${#MULTIFILE_TITLE} -gt $((MULTIFILE_WIDTH - 3)) ] && MULTIFILE_WIDTH=$((${#MULTIFILE_TITLE} + 3))
+    MULTIFILE_TITLE_FILL=$((MULTIFILE_WIDTH - ${#MULTIFILE_TITLE} - 3))
+    [ "$MULTIFILE_TITLE_FILL" -lt 1 ] && MULTIFILE_TITLE_FILL=1
+    echo -e "${BOLD}${CYAN}╭─ ${MULTIFILE_TITLE} $(make_rule "$MULTIFILE_TITLE_FILL")╮${RESET}"
+
+    for index in "${!MULTIFILE_STATUSES[@]}"; do
+        MULTIFILE_STATUS="${MULTIFILE_STATUSES[$index]}"
+        MULTIFILE_ROW_COLOR="${MULTIFILE_ROW_COLORS[$index]}"
+        MULTIFILE_RESULT_URL="${MULTIFILE_RESULT_URLS[$index]}"
+        MULTIFILE_RUNNER_FILE="${MULTIFILE_RUNNER_FILES[$index]}"
+        printf "${CYAN}│${RESET} "
+        if [ -n "$MULTIFILE_RESULT_URL" ]; then
+            printf '\033]8;;%s\033\\%b%s%b\033]8;;\033\\' "$MULTIFILE_RESULT_URL" "$MULTIFILE_ROW_COLOR" "$MULTIFILE_STATUS" "$RESET"
+        else
+            printf "%b%s%b" "$MULTIFILE_ROW_COLOR" "$MULTIFILE_STATUS" "$RESET"
+        fi
+        if [ -n "$MULTIFILE_RUNNER_FILE" ]; then
+            printf ' '
+            RUNNER_LINK_FILE="$MULTIFILE_RUNNER_FILE"
+            print_runner_link
+            printf "%*s ${CYAN}│${RESET}\n" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 16))" ""
+        else
+            printf "%*s ${CYAN}│${RESET}\n" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
+        fi
+    done
+
     echo -e "${BOLD}${CYAN}╰$(make_rule "$MULTIFILE_WIDTH")╯${RESET}"
 fi
