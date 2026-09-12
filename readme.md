@@ -45,6 +45,7 @@ By default, if no file is specified, hawking picks the **most-recently edited fi
 * **`--update`**: Force an immediate repository **update**.
 * **`--vocal`**: Enable **verbose output** and logs.
 * **`--debug`**: Dump raw **JSON response**.
+* **`--runner`**: Open test runner source from the response in **Neovim**.
 * **`--modules`**: List all **cached module IDs**.
 * **`--add-module <ID>`**: Manually add a **module ID** to cache.
 * **`--clear-cache`**: Clear the **history cache**.

@@ -26,6 +26,7 @@ SHOW_MODULES=false
 LOGOUT=false
 FORCE_UPDATE=false
 SHOW_VERSION=false
+SHOW_RUNNER=false
 ADD_MODULE_ID=""
 ARGS=()
 
@@ -57,6 +58,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --version|-v)
             SHOW_VERSION=true
+            shift
+            ;;
+        --runner)
+            SHOW_RUNNER=true
             shift
             ;;
         --add-module)
@@ -356,6 +361,44 @@ decode_b64() {
     echo "$input" | base64 --decode 2>/dev/null || echo "$input" | base64 -D 2>/dev/null || echo ""
 }
 
+open_runners() {
+    local response="$1"
+    local runner_dir
+    local runner_file
+    local test_id
+    local test_filename
+    local runner_files=()
+
+    if ! command -v nvim &> /dev/null; then
+        echo -e "${RED}Error: ${BOLD}nvim is required${RESET}${RED} for --runner.${RESET}"
+        return 1
+    fi
+
+    runner_dir=$(mktemp -d)
+    while IFS=$'\t' read -r test_id test_filename; do
+        [ -n "$test_id" ] || continue
+        test_filename=$(basename "${test_filename:-runner.py}")
+        runner_file="${runner_dir}/${test_id}-${test_filename}"
+        printf '%s\n' "$response" | jq -r --arg test_id "$test_id" '.tests[$test_id].testCode' > "$runner_file"
+        runner_files+=("$runner_file")
+    done < <(printf '%s\n' "$response" | jq -r '.tests // {} | to_entries[] | select(.value.testCode? != null and .value.testCode != "") | [.key, (.value.testCodeFilename // "runner.py")] | @tsv')
+
+    if [ ${#runner_files[@]} -eq 0 ]; then
+        rm -rf "$runner_dir"
+        echo -e "${YELLOW}No ${BOLD}runner source${RESET}${YELLOW} was included in the response.${RESET}"
+        return 0
+    fi
+
+    if nvim -p "${runner_files[@]}"; then
+        :
+    else
+        local nvim_status=$?
+        rm -rf "$runner_dir"
+        return "$nvim_status"
+    fi
+    rm -rf "$runner_dir"
+}
+
 make_rule() {
     printf '%*s' "$1" '' | sed 's/ /─/g'
 }
@@ -454,6 +497,10 @@ for FILE in "${FILES[@]}"; do
     if [ "$DEBUG" = true ]; then
         echo -e "${BOLD}=== Full JSON Response (Debug) ===${RESET}"
         echo "$RESPONSE" | jq .
+    fi
+
+    if [ "$SHOW_RUNNER" = true ]; then
+        open_runners "$RESPONSE"
         continue
     fi
 
