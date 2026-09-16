@@ -415,6 +415,19 @@ make_rule() {
     printf '%*s' "$1" '' | sed 's/ /─/g'
 }
 
+get_terminal_width() {
+    local width
+    width=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }' || true)
+    if [[ ! "$width" =~ ^[0-9]+$ ]]; then
+        width=$(tput cols 2>/dev/null || true)
+    fi
+    if [[ ! "$width" =~ ^[0-9]+$ ]]; then
+        width="${COLUMNS:-80}"
+    fi
+    [ "$width" -lt 1 ] && width=80
+    printf '%s' "$width"
+}
+
 expand_tabs() {
     printf '%s\n' "$1" | LC_ALL=C expand -t 8
 }
@@ -557,7 +570,8 @@ for FILE in "${FILES[@]}"; do
         [ $((13 + ${#RUNNERS_STATUS})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#RUNNERS_STATUS}))
         [ $((13 + ${#CURRENT_ASSIGNMENT_ID})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#CURRENT_ASSIGNMENT_ID}))
         [ $((13 + ${#MODULE_CODE})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#MODULE_CODE}))
-        [ $((13 + ${#FILE})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#FILE}))
+        DISPLAY_FILENAME=$(basename "$FILE")
+        [ $((13 + ${#DISPLAY_FILENAME})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#DISPLAY_FILENAME}))
         [ $((13 + ${#SUBMITTER_USERNAME})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#SUBMITTER_USERNAME}))
         ATTEMPT_TITLE_FILL=$((ATTEMPT_CONTENT_WIDTH - 13))
         FILE_PATH="$(cd "$(dirname "$FILE")" && pwd)/$(basename "$FILE")"
@@ -568,8 +582,8 @@ for FILE in "${FILES[@]}"; do
         printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "Module ID:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$CURRENT_ASSIGNMENT_ID"
         printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}%-*s${RESET} ${CYAN}│${RESET}\n" "Module Code:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$MODULE_CODE"
         printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}" "Filename:"
-        printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$FILE_URL" "$FILE"
-        printf "${RESET}%*s ${CYAN}│${RESET}\n" "$((ATTEMPT_CONTENT_WIDTH - 13 - ${#FILE}))" ""
+        printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$FILE_URL" "$DISPLAY_FILENAME"
+        printf "${RESET}%*s ${CYAN}│${RESET}\n" "$((ATTEMPT_CONTENT_WIDTH - 13 - ${#DISPLAY_FILENAME}))" ""
         printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${RUNNERS_STATUS_COLOR}%-*s${RESET} ${CYAN}│${RESET}\n" "Runners:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$RUNNERS_STATUS"
         echo -e "${BOLD}${CYAN}╰$(make_rule "$((ATTEMPT_CONTENT_WIDTH + 2))")╯${RESET}"
 
@@ -609,6 +623,10 @@ for FILE in "${FILES[@]}"; do
                     ][]
                 ' | LC_ALL=C expand -t 8 | awk '{ gsub(/[│✓✗—‘’]/, "x"); if (length > max) max = length } END { print max }')
         TEST_CONTENT_WIDTH=${TEST_CONTENT_WIDTH:-20}
+        TERMINAL_WIDTH=$(get_terminal_width)
+        MAX_TEST_CONTENT_WIDTH=$((TERMINAL_WIDTH - 4))
+        [ "$MAX_TEST_CONTENT_WIDTH" -lt 20 ] && MAX_TEST_CONTENT_WIDTH=20
+        [ "$TEST_CONTENT_WIDTH" -gt "$MAX_TEST_CONTENT_WIDTH" ] && TEST_CONTENT_WIDTH="$MAX_TEST_CONTENT_WIDTH"
                 if echo "$RESPONSE" | jq -e '.attempt.testResults[] | select(.correct != true)' >/dev/null; then
                     TEST_BORDER_COLOR="$RED"
                 else
@@ -648,7 +666,15 @@ for FILE in "${FILES[@]}"; do
 
                     if [ "$IS_MULTILINE" = true ]; then
                     printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Expected:${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
-                    printf '%s\n' "${EXP_CLEAN:-<empty>}" | awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v reset="${RESET}" '{ line = "    | " $0; plain_line = line; gsub(/[‘’]/, "x", plain_line); padding = width - length(plain_line); printf "%s│%s     %s|%s %s%s %s│%s\n", border, reset, white, reset, $0, sprintf("%*s", padding, ""), border, reset }'
+                    printf '%s\n' "${EXP_CLEAN:-<empty>}" | awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v reset="${RESET}" '
+                    {
+                        text = ($0 == "" ? "<empty>" : $0)
+                        for (start = 1; start <= length(text); start += width - 6) {
+                            chunk = substr(text, start, width - 6)
+                            padding = width - 6 - length(chunk)
+                            printf "%s│%s     %s|%s %s%s %s│%s\n", border, reset, white, reset, chunk, sprintf("%*s", padding, ""), border, reset
+                        }
+                    }'
                     printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Actual:  ${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
                     EXP_DATA="$EXP_CLEAN" ACT_DATA="$ACT_CLEAN" awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v green="${GREEN}" -v red="${RED}" -v reset="${RESET}" '
                     BEGIN {
@@ -661,32 +687,27 @@ for FILE in "${FILES[@]}"; do
                         for (i = 1; i <= n_act; i++) {
                             line = act_lines[i]
                             display_line = (line == "" ? "<empty>" : line)
-                            display_detail = "    | " display_line
-                            plain_display_detail = display_detail
-                            gsub(/[‘’]/, "x", plain_display_detail)
-                            padding = width - length(plain_display_detail)
-                            if (i <= n_exp && line == exp_lines[i]) {
-                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, green, display_line, reset, sprintf("%*s", padding, ""), border, reset
-                            } else {
-                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, red, display_line, reset, sprintf("%*s", padding, ""), border, reset
+                            for (start = 1; start <= length(display_line); start += width - 6) {
+                                chunk = substr(display_line, start, width - 6)
+                                padding = width - 6 - length(chunk)
+                                color = (i <= n_exp && line == exp_lines[i]) ? green : red
+                                printf "%s│%s     %s|%s %s%s%s%s %s│%s\n", border, reset, white, reset, color, chunk, reset, sprintf("%*s", padding, ""), border, reset
                             }
                         }
                     }'
                     else
                     printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Expected:${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
                     EXPECTED_DISPLAY="${EXP_CLEAN:-<empty>}"
-                    EXPECTED_PADDING=$((TEST_CONTENT_WIDTH - ${#EXPECTED_DISPLAY} - 6))
-                    [ "$EXPECTED_PADDING" -lt 0 ] && EXPECTED_PADDING=0
-                    printf "${TEST_BORDER_COLOR}│${RESET}     ${WHITE}|${RESET} %s%*s ${TEST_BORDER_COLOR}│${RESET}\n" "$EXPECTED_DISPLAY" "$EXPECTED_PADDING" ""
+                    printf '%s\n' "$EXPECTED_DISPLAY" | fold -w "$((TEST_CONTENT_WIDTH - 6))" | while IFS= read -r EXPECTED_LINE; do
+                        EXPECTED_PADDING=$((TEST_CONTENT_WIDTH - ${#EXPECTED_LINE} - 6))
+                        printf "${TEST_BORDER_COLOR}│${RESET}     ${WHITE}|${RESET} %s%*s ${TEST_BORDER_COLOR}│${RESET}\n" "$EXPECTED_LINE" "$EXPECTED_PADDING" ""
+                    done
                     printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Actual:  ${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 9))" ""
 
                     ACT_LEN=${#ACT_CLEAN}
                     EXP_LEN=${#EXP_CLEAN}
                     MAX_LEN=$ACT_LEN
                     [ $EXP_LEN -gt $MAX_LEN ] && MAX_LEN=$EXP_LEN
-                    ACTUAL_PADDING=$((TEST_CONTENT_WIDTH - ACT_LEN - 6))
-                    [ "$ACTUAL_PADDING" -lt 0 ] && ACTUAL_PADDING=0
-
                     printf "${TEST_BORDER_COLOR}│${RESET}     ${WHITE}|${RESET} "
                     if [ "$ACT_LEN" -eq 0 ]; then
                         ACTUAL_DISPLAY="<empty>"
@@ -694,6 +715,8 @@ for FILE in "${FILES[@]}"; do
                         [ "$ACTUAL_PADDING" -lt 0 ] && ACTUAL_PADDING=0
                         printf "${RED}%s${RESET}" "$ACTUAL_DISPLAY"
                     else
+                        DISPLAY_WIDTH=$((TEST_CONTENT_WIDTH - 6))
+                        DISPLAY_COLUMN=0
                         for (( i=0; i<MAX_LEN; i++ )); do
                             CHAR_ACT="${ACT_CLEAN:$i:1}"
                             CHAR_EXP="${EXP_CLEAN:$i:1}"
@@ -704,8 +727,15 @@ for FILE in "${FILES[@]}"; do
                                 PRINT_CHAR="${CHAR_ACT:- }"
                                 printf "${RED}%s${RESET}" "$PRINT_CHAR"
                             fi
+                            DISPLAY_COLUMN=$((DISPLAY_COLUMN + 1))
+                            if [ "$DISPLAY_COLUMN" -eq "$DISPLAY_WIDTH" ] && [ $((i + 1)) -lt "$MAX_LEN" ]; then
+                                printf "%*s ${TEST_BORDER_COLOR}│${RESET}\n${TEST_BORDER_COLOR}│${RESET}     ${WHITE}|${RESET} " "$((TEST_CONTENT_WIDTH - 6 - DISPLAY_COLUMN))" ""
+                                DISPLAY_COLUMN=0
+                            fi
                         done
                     fi
+                    ACTUAL_PADDING=$((TEST_CONTENT_WIDTH - 6 - DISPLAY_COLUMN))
+                    [ "$ACTUAL_PADDING" -lt 0 ] && ACTUAL_PADDING=0
                     printf "%*s ${TEST_BORDER_COLOR}│${RESET}\n" "$ACTUAL_PADDING" ""
                     fi
                 fi
