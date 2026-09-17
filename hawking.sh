@@ -347,7 +347,7 @@ fi
 # ---- File Selection ----
 IS_MULTI=false
 if [ ${#FILES[@]} -eq 0 ]; then
-    NEWEST_FILE=$(ls -t 2>/dev/null | grep -v -E "^($SCRIPT_NAME|\..*)$" | head -n 1 || true)
+    NEWEST_FILE=$(ls -t 2>/dev/null | grep -v -E "^($SCRIPT_NAME|\..*|[^.]+$|.*\.out)$" | head -n 1 || true)
     if [ -z "$NEWEST_FILE" ]; then
         echo -e "${RED}No ${BOLD}suitable file found${RESET}${RED} in current directory.${RESET}"
         exit 1
