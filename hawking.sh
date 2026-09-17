@@ -7,6 +7,7 @@ COOKIE_FILE="$HOME/.hawking_cookie"
 USER_FILE="$HOME/.hawking_user"
 CACHE_FILE="$HOME/.hawking_history"
 UPDATE_CHECK_FILE="$HOME/.hawking_last_update"
+UPDATE_REPO_URL="https://github.com/RealFFF000/Hawking-cli"
 SCRIPT_NAME="$(basename "$0")"
 
 GREEN="\033[0;32m"
@@ -77,6 +78,48 @@ done
 
 now=$(date +%s)
 
+update_installed_cli() {
+    local temp_dir
+    local temp_repo
+    local staged_home
+    local new_repo
+    local old_repo
+    temp_dir=$(mktemp -d)
+    temp_repo="$temp_dir/hawking-cli"
+    staged_home="$temp_dir/home"
+    new_repo="$temp_dir/new-hawking"
+    old_repo="$temp_dir/old-hawking"
+
+    if ! git clone --quiet --depth 1 --single-branch --branch main "$UPDATE_REPO_URL" "$temp_repo" >/dev/null 2>&1; then
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    mkdir -p "$staged_home"
+    if ! (cd "$temp_repo" && HOME="$staged_home" ./install.sh >/dev/null 2>&1); then
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    if ! cp -R "$temp_repo" "$new_repo" || ! cp -R "$staged_home/.hawking/bin" "$new_repo/bin"; then
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    if [ -d "$HOME/.hawking" ] && ! mv "$HOME/.hawking" "$old_repo"; then
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    if ! mv "$new_repo" "$HOME/.hawking"; then
+        [ -d "$old_repo" ] && mv "$old_repo" "$HOME/.hawking"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+
+    rm -rf "$temp_dir"
+}
+
 # ---- Handle --version ----
 if [ "$SHOW_VERSION" = true ]; then
     if [ -d "$HOME/.hawking/.git" ]; then
@@ -91,21 +134,8 @@ fi
 
 # ---- Handle --update (Forces Overwrite of Local Changes) ----
 if [ "$FORCE_UPDATE" = true ]; then
+    update_installed_cli || true
     echo "$now" > "$UPDATE_CHECK_FILE"
-    if [ -d "$HOME/.hawking/.git" ]; then
-        echo -e "${YELLOW}Forcing repository ${BOLD}update${RESET}${YELLOW} (overriding local changes)...${RESET}"
-        if git -C "$HOME/.hawking" fetch origin && git -C "$HOME/.hawking" reset --hard origin/main; then
-            if [ -f "$HOME/.hawking/hawking.sh" ]; then
-                cp "$HOME/.hawking/hawking.sh" "$HOME/.hawking/bin/hawking"
-                chmod +x "$HOME/.hawking/bin/hawking"
-            fi
-            echo -e "${GREEN}Successfully ${BOLD}updated${RESET}${GREEN} and re-installed Hawking CLI.${RESET}"
-        else
-            echo -e "${RED}Update ${BOLD}failed${RESET}${RED} (network issue). Cooldown reset.${RESET}"
-        fi
-    else
-        echo -e "${YELLOW}No ${BOLD}git repository${RESET}${YELLOW} found in ~/.hawking to update.${RESET}"
-    fi
     exit 0
 fi
 
@@ -164,15 +194,8 @@ else
 fi
 
 if [ "$should_check" = true ]; then
+    update_installed_cli || true
     echo "$now" > "$UPDATE_CHECK_FILE"
-    if [ -d "$HOME/.hawking/.git" ]; then
-        if git -C "$HOME/.hawking" fetch origin --quiet 2>/dev/null && git -C "$HOME/.hawking" reset --hard origin/main --quiet 2>/dev/null; then
-            if [ -f "$HOME/.hawking/hawking.sh" ]; then
-                cp "$HOME/.hawking/hawking.sh" "$HOME/.hawking/bin/hawking"
-                chmod +x "$HOME/.hawking/bin/hawking"
-            fi
-        fi
-    fi
 fi
 
 # ---- Load & Manage Cache ----
