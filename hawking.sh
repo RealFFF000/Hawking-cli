@@ -296,6 +296,15 @@ is_cookie_expired() {
     [ $age -gt "$COOKIE_TTL" ]
 }
 
+is_cookie_valid() {
+    local session_response
+    session_response=$(curl -s -L --connect-timeout "$CONNECT_TIMEOUT" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$BASE_URL" || true)
+    if echo "$session_response" | grep -qE 'name="(_username|_password)"|action="[^"]*/login'; then
+        return 1
+    fi
+    return 0
+}
+
 prompt_for_cookie() {
     check_hawking_connection
     if [ "$VOCAL" = true ]; then
@@ -319,11 +328,6 @@ prompt_for_cookie() {
         exit 1
     fi
 }
-
-check_hawking_connection
-if [ ! -f "$COOKIE_FILE" ] || is_cookie_expired; then
-    prompt_for_cookie
-fi
 
 # ---- Upload request function ----
 execute_upload() {
@@ -381,12 +385,31 @@ if [ ${#ARGS[@]} -ge 1 ]; then
 fi
 
 if [ ${#FILES[@]} -gt 0 ]; then
+    valid_files=()
     for f in "${FILES[@]}"; do
         if [ ! -f "$f" ]; then
             echo -e "${RED}Error: ${BOLD}No such file exists${RESET}${RED}: ${BOLD}${f}${RESET}"
             exit 1
         fi
+        filename=$(basename "$f")
+        if [[ "$filename" == "$IGNORE_SCRIPT" || "$filename" != *.* ]] || { [ "$IGNORE_HIDDEN" = true ] && [[ "$filename" == .* ]]; }; then
+            continue
+        fi
+        ignored=false
+        IFS=',' read -ra ignored_extensions <<< "$IGNORE_EXTENSIONS"
+        for extension in "${ignored_extensions[@]}"; do
+            if [[ "$filename" == *"$extension" ]]; then
+                ignored=true
+                break
+            fi
+        done
+        [ "$ignored" = true ] || valid_files+=("$f")
     done
+    FILES=("${valid_files[@]}")
+    if [ ${#FILES[@]} -eq 0 ]; then
+        echo -e "${RED}No ${BOLD}suitable files found${RESET}${RED} to upload.${RESET}"
+        exit 1
+    fi
 fi
 
 if [ -z "$ASSIGNMENT_ID" ]; then
@@ -433,6 +456,14 @@ else
         IS_MULTI=true
         FILES=("${expanded_files[@]}")
     fi
+fi
+
+check_hawking_connection
+if [ ! -f "$COOKIE_FILE" ] || is_cookie_expired; then
+    prompt_for_cookie
+elif ! is_cookie_valid; then
+    rm -f "$COOKIE_FILE"
+    prompt_for_cookie
 fi
 
 if [ "$IS_MULTI" = false ] && [ "$VOCAL" = true ]; then
