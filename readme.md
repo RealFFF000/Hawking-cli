@@ -10,6 +10,10 @@ A lightweight **Bash utility** to submit assignment files to Hawking, automatica
 * **`jq`** (`brew install jq` or `sudo apt install jq`)
 * **`bash`** (v4.0+)
 
+## Configuration
+
+Runtime assumptions are stored in [`config.yaml`](config.yaml). It controls the Hawking URLs, GitHub updater source, update interval, session paths and TTL, network timeouts, and automatic file-selection exclusions. The installer copies it alongside the installed CLI, and built-in defaults are used if a setting is missing.
+
 ## Features
 
 * **Auto-Login Management (`hawking-login`):** Automatically triggers authentication and handles **cookie-jar storage** (`~/.hawking_cookie`) whenever sessions expire or are missing.

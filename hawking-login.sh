@@ -7,6 +7,49 @@ LOGIN_URL="https://hawking.computing.dcu.ie/login"
 COOKIE_FILE="$HOME/.hawking_cookie"
 USER_FILE="$HOME/.hawking_user"
 CACHE_FILE="$HOME/.hawking_history"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/config.yaml"
+[ -f "$CONFIG_FILE" ] || CONFIG_FILE="$(cd "$SCRIPT_DIR/.." && pwd)/config.yaml"
+
+config_value() {
+    local key="$1"
+    local default_value="$2"
+    local value=""
+
+    if [ -f "$CONFIG_FILE" ]; then
+        value=$(awk -v wanted="$key" '
+            /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+            {
+                key_part = $0
+                sub(/:.*/, "", key_part)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", key_part)
+                if (key_part != wanted) next
+                value_part = $0
+                sub(/^[^:]*:/, "", value_part)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value_part)
+                sub(/[[:space:]]+#.*$/, "", value_part)
+                if (value_part ~ /^".*"$/ || value_part ~ /^\047.*\047$/) {
+                    value_part = substr(value_part, 2, length(value_part) - 2)
+                }
+                print value_part
+                exit
+            }
+        ' "$CONFIG_FILE")
+    fi
+
+    printf '%s' "${value:-$default_value}"
+}
+
+expand_config_path() {
+    printf '%s' "${1//\$HOME/$HOME}"
+}
+
+BASE_URL=$(config_value 'server.base_url' "$BASE_URL")
+LOGIN_URL=$(config_value 'server.login_url' "$LOGIN_URL")
+COOKIE_FILE=$(expand_config_path "$(config_value 'session.cookie_file' "$COOKIE_FILE")")
+USER_FILE=$(expand_config_path "$(config_value 'session.user_file' "$USER_FILE")")
+CACHE_FILE=$(expand_config_path "$(config_value 'session.cache_file' "$CACHE_FILE")")
+CONNECT_TIMEOUT=$(config_value 'network.connect_timeout_seconds' 5)
 HEADER_FILE=$(mktemp)
 COOKIE_JAR=$(mktemp)
 
@@ -73,7 +116,7 @@ if [ "$VOCAL" = true ]; then
 fi
 
 # 1. Fetch initial login page to get CSRF token and seed initial cookie jar
-INIT_RESPONSE=$(curl -s -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$LOGIN_URL")
+INIT_RESPONSE=$(curl -s --connect-timeout "$CONNECT_TIMEOUT" -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$LOGIN_URL")
 
 CSRF_TOKEN=$(echo "$INIT_RESPONSE" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
 
@@ -87,10 +130,10 @@ if [ "$VOCAL" = true ]; then
 fi
 
 # 2. POST credentials without auto-following redirects so we can inspect the 302
-curl -s -D "$HEADER_FILE" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$LOGIN_URL" \
+curl -s --connect-timeout "$CONNECT_TIMEOUT" -D "$HEADER_FILE" -b "$COOKIE_JAR" -c "$COOKIE_JAR" -X POST "$LOGIN_URL" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -H "Referer: $LOGIN_URL" \
-    -H "Origin: https://hawking.computing.dcu.ie" \
+    -H "Origin: $(config_value 'server.origin' 'https://hawking.computing.dcu.ie')" \
     --data-urlencode "_username=${USERNAME}" \
     --data-urlencode "_password=${PASSWORD}" \
     --data-urlencode "_csrf_token=${CSRF_TOKEN}" > /dev/null
@@ -142,7 +185,7 @@ if [[ "$TARGET_URL" != http* ]]; then
     TARGET_URL="https://hawking.computing.dcu.ie${TARGET_URL}"
 fi
 
-PORTAL_RESPONSE=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$TARGET_URL")
+PORTAL_RESPONSE=$(curl -s -L --connect-timeout "$CONNECT_TIMEOUT" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$TARGET_URL")
 
 if echo "$PORTAL_RESPONSE" | grep -q 'name="_username"'; then
     echo -e "${RED}Login failed: ${BOLD}Session rejected${RESET}${RED} on post-login redirect.${RESET}"
@@ -154,7 +197,7 @@ fi
 if [ "$VOCAL" = true ]; then
     echo -e "${YELLOW}Scraping active ${BOLD}module IDs${RESET}${YELLOW} from dashboard...${RESET}"
 fi
-DASHBOARD_HTML=$(curl -s -L -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$BASE_URL")
+DASHBOARD_HTML=$(curl -s -L --connect-timeout "$CONNECT_TIMEOUT" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$BASE_URL")
 
 SCAPED_IDS=$(echo "$DASHBOARD_HTML" | grep -oE 'href="/hawking/[0-9]+"' | grep -oE '[0-9]+' | sort -u || true)
 

@@ -8,7 +8,67 @@ USER_FILE="$HOME/.hawking_user"
 CACHE_FILE="$HOME/.hawking_history"
 UPDATE_CHECK_FILE="$HOME/.hawking_last_update"
 UPDATE_REPO_URL="https://github.com/RealFFF000/Hawking-cli"
+UPDATE_BRANCH="main"
+UPDATE_CHECK_INTERVAL=604800
+COOKIE_TTL=7200
+CONNECT_TIMEOUT=5
+HEALTHCHECK_TIMEOUT=4
+IGNORE_EXTENSIONS=".out"
+IGNORE_HIDDEN=true
+IGNORE_SCRIPT="hawking.sh"
 SCRIPT_NAME="$(basename "$0")"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/config.yaml"
+[ -f "$CONFIG_FILE" ] || CONFIG_FILE="$(cd "$SCRIPT_DIR/.." && pwd)/config.yaml"
+
+config_value() {
+    local key="$1"
+    local default_value="$2"
+    local value=""
+
+    if [ -f "$CONFIG_FILE" ]; then
+        value=$(awk -v wanted="$key" '
+            /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+            {
+                key_part = $0
+                sub(/:.*/, "", key_part)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", key_part)
+                if (key_part != wanted) next
+                value_part = $0
+                sub(/^[^:]*:/, "", value_part)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value_part)
+                sub(/[[:space:]]+#.*$/, "", value_part)
+                if (value_part ~ /^".*"$/ || value_part ~ /^\047.*\047$/) {
+                    value_part = substr(value_part, 2, length(value_part) - 2)
+                }
+                print value_part
+                exit
+            }
+        ' "$CONFIG_FILE")
+    fi
+
+    printf '%s' "${value:-$default_value}"
+}
+
+expand_config_path() {
+    printf '%s' "${1//\$HOME/$HOME}"
+}
+
+BASE_URL=$(config_value 'server.base_url' "$BASE_URL")
+UPDATE_REPO_URL=$(config_value 'update.repository' "$UPDATE_REPO_URL")
+UPDATE_BRANCH=$(config_value 'update.branch' "$UPDATE_BRANCH")
+UPDATE_CHECK_INTERVAL=$(config_value 'update.check_interval_seconds' "$UPDATE_CHECK_INTERVAL")
+UPDATE_CHECK_FILE=$(expand_config_path "$(config_value 'update.check_file' "$UPDATE_CHECK_FILE")")
+COOKIE_FILE=$(expand_config_path "$(config_value 'session.cookie_file' "$COOKIE_FILE")")
+USER_FILE=$(expand_config_path "$(config_value 'session.user_file' "$USER_FILE")")
+CACHE_FILE=$(expand_config_path "$(config_value 'session.cache_file' "$CACHE_FILE")")
+COOKIE_TTL=$(config_value 'session.cookie_ttl_seconds' "$COOKIE_TTL")
+CONNECT_TIMEOUT=$(config_value 'network.connect_timeout_seconds' "$CONNECT_TIMEOUT")
+HEALTHCHECK_TIMEOUT=$(config_value 'network.healthcheck_timeout_seconds' "$HEALTHCHECK_TIMEOUT")
+IGNORE_EXTENSIONS=$(config_value 'file_selection.ignore_extensions' "$IGNORE_EXTENSIONS")
+IGNORE_HIDDEN=$(config_value 'file_selection.ignore_hidden' "$IGNORE_HIDDEN")
+IGNORE_SCRIPT=$(config_value 'file_selection.ignore_script' "$IGNORE_SCRIPT")
 
 GREEN="\033[0;32m"
 RED="\033[0;31m"
@@ -90,7 +150,7 @@ update_installed_cli() {
     new_repo="$temp_dir/new-hawking"
     old_repo="$temp_dir/old-hawking"
 
-    if ! git clone --quiet --depth 1 --single-branch --branch main "$UPDATE_REPO_URL" "$temp_repo" >/dev/null 2>&1; then
+    if ! git clone --quiet --depth 1 --single-branch --branch "$UPDATE_BRANCH" "$UPDATE_REPO_URL" "$temp_repo" >/dev/null 2>&1; then
         rm -rf "$temp_dir"
         return 1
     fi
@@ -188,7 +248,7 @@ if [ ! -f "$UPDATE_CHECK_FILE" ]; then
     should_check=true
 else
     last_check=$(cat "$UPDATE_CHECK_FILE" 2>/dev/null || echo 0)
-    if [ $((now - last_check)) -gt 604800 ]; then
+    if [ $((now - last_check)) -gt "$UPDATE_CHECK_INTERVAL" ]; then
         should_check=true
     fi
 fi
@@ -218,7 +278,7 @@ save_cached_id() {
 
 # ---- Connection & Cookie TTL Checks ----
 check_hawking_connection() {
-    if ! curl -s --head --connect-timeout 4 "$BASE_URL" >/dev/null 2>&1; then
+    if ! curl -s --head --connect-timeout "$HEALTHCHECK_TIMEOUT" "$BASE_URL" >/dev/null 2>&1; then
         echo -e "${RED}Error: ${BOLD}Cannot connect to Hawking${RESET}${RED}. The server may be down or unreachable.${RESET}"
         exit 1
     fi
@@ -233,7 +293,7 @@ is_cookie_expired() {
     local mtime
     mtime=$(stat -c %Y "$COOKIE_FILE" 2>/dev/null || stat -f %m "$COOKIE_FILE" 2>/dev/null || echo 0)
     local age=$(( now_epoch - mtime ))
-    [ $age -gt 7200 ]
+    [ $age -gt "$COOKIE_TTL" ]
 }
 
 prompt_for_cookie() {
@@ -272,7 +332,7 @@ execute_upload() {
     local url="${BASE_URL}/${target_id}/fileUpload"
     local page_url="${BASE_URL}/${target_id}"
 
-    PAGE_HTML=$(curl -s -L --connect-timeout 5 -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$page_url")
+    PAGE_HTML=$(curl -s -L --connect-timeout "$CONNECT_TIMEOUT" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$page_url")
     MODULE_CODE=$(printf '%s' "$PAGE_HTML" | sed -nE 's/.*id="sidebarCourse">[[:space:]]*([^<[:space:]]+).*/\1/p' | head -n 1)
     MODULE_CODE="${MODULE_CODE:-unknown}"
     printf '%s' "$MODULE_CODE" > "$MODULE_CODE_FILE"
@@ -282,12 +342,12 @@ execute_upload() {
         CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'data-csrf-token="[^"]*"' | sed -E 's/.*data-csrf-token="[^"]*"//' || true)
     fi
 
-    CURL_CMD=(curl -s --connect-timeout 5 -w "\n%{http_code}" -X POST "$url"
+    CURL_CMD=(curl -s --connect-timeout "$CONNECT_TIMEOUT" -w "\n%{http_code}" -X POST "$url"
       -b "$COOKIE_FILE"
       -c "$COOKIE_FILE"
       -H "X-Requested-With: XMLHttpRequest"
       -H "Referer: ${page_url}"
-      -H "Origin: https://hawking.computing.dcu.ie"
+    -H "Origin: $(config_value 'server.origin' 'https://hawking.computing.dcu.ie')"
       -H "Accept: application/json, text/javascript, */*; q=0.01"
       -F "file=@${file_to_upload}")
 
@@ -347,7 +407,11 @@ fi
 # ---- File Selection ----
 IS_MULTI=false
 if [ ${#FILES[@]} -eq 0 ]; then
-    NEWEST_FILE=$(ls -t 2>/dev/null | grep -v -E "^($SCRIPT_NAME|\..*|[^.]+$|.*\.out)$" | head -n 1 || true)
+    IGNORE_PATTERN="^(${SCRIPT_NAME}|${IGNORE_SCRIPT}|[^.]+$"
+    [ "$IGNORE_HIDDEN" = true ] && IGNORE_PATTERN+="|\..*"
+    [ -n "$IGNORE_EXTENSIONS" ] && IGNORE_PATTERN+="|.*${IGNORE_EXTENSIONS//,/|}$"
+    IGNORE_PATTERN+=")$"
+    NEWEST_FILE=$(ls -t 2>/dev/null | grep -v -E "$IGNORE_PATTERN" | head -n 1 || true)
     if [ -z "$NEWEST_FILE" ]; then
         echo -e "${RED}No ${BOLD}suitable file found${RESET}${RED} in current directory.${RESET}"
         exit 1

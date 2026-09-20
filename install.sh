@@ -31,6 +31,10 @@ if [ -f "hawking-login.sh" ]; then
     echo -e "${GREEN}Installed ${BOLD}hawking-login${RESET}${GREEN} command.${RESET}"
 fi
 
+if [ -f "config.yaml" ]; then
+    cp config.yaml "$INSTALL_DIR/config.yaml"
+fi
+
 # Preserve git repository context locally for the quiet weekly pull
 if [ -d ".git" ]; then
     rm -rf "$INSTALL_DIR/.git"
