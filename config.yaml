@@ -16,6 +16,6 @@ session.cookie_ttl_seconds: 7200
 network.connect_timeout_seconds: 5
 network.healthcheck_timeout_seconds: 4
 
-file_selection.ignore_extensions: ".out"
+file_selection.ignore_extensions: ".out,.exe,.o,.log"
 file_selection.ignore_hidden: true
 file_selection.ignore_script: "hawking.sh"
