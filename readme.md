@@ -48,7 +48,7 @@ By default, if no file is specified, hawking picks the most-recently edited suit
 * **`--update`**: Force an immediate repository **update**.
 * **`--vocal`**: Enable **verbose output** and logs.
 * **`--debug`**: Dump raw **JSON response**.
-* **`--runner`**: Open test runner source from the response in **Neovim**.
+* **`--runner`**: Submit through the legacy web endpoint to retrieve runner source files, then open them in **Neovim**. This is the only mode that uses the legacy web flow.
 * **`--modules`**: List all cached module IDs.
 * **`--add-module <ID>`**: Manually add a module ID to cache.
 * **`--clear-cache`**: Clear the history cache.

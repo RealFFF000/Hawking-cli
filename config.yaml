@@ -6,16 +6,16 @@ api.base_url: "https://hawking.computing.dcu.ie/api"
 
 update.repository: "https://github.com/RealFFF000/Hawking-cli"
 update.branch: "main"
+update.enabled: false
 update.check_interval_seconds: 604800
 update.check_file: "$HOME/.hawking_last_update"
 
 session.cookie_file: "$HOME/.hawking_cookie"
 session.user_file: "$HOME/.hawking_user"
 session.cache_file: "$HOME/.hawking_history"
-session.cookie_ttl_seconds: 7200
 
 network.connect_timeout_seconds: 5
-network.healthcheck_timeout_seconds: 4
+network.max_time_seconds: 60
 
 file_selection.ignore_extensions: ".out,.exe,.o,.log"
 file_selection.ignore_hidden: true

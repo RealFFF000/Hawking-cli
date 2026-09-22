@@ -24,13 +24,6 @@ else
     echo -e "${YELLOW}Warning: hawking.sh ${BOLD}not found${RESET}${YELLOW} in current directory.${RESET}"
 fi
 
-# Copy login script if present
-if [ -f "hawking-login.sh" ]; then
-    cp hawking-login.sh "$BIN_DIR/hawking-login"
-    chmod +x "$BIN_DIR/hawking-login"
-    echo -e "${GREEN}Installed ${BOLD}hawking-login${RESET}${GREEN} command.${RESET}"
-fi
-
 if [ -f "config.yaml" ]; then
     cp config.yaml "$INSTALL_DIR/config.yaml"
 fi
