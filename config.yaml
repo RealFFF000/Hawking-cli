@@ -2,6 +2,7 @@
 server.base_url: "https://hawking.computing.dcu.ie/hawking"
 server.login_url: "https://hawking.computing.dcu.ie/login"
 server.origin: "https://hawking.computing.dcu.ie"
+api.base_url: "https://hawking.computing.dcu.ie/api"
 
 update.repository: "https://github.com/RealFFF000/Hawking-cli"
 update.branch: "main"

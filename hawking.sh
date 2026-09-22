@@ -3,6 +3,7 @@
 set -euo pipefail
 
 BASE_URL="https://hawking.computing.dcu.ie/hawking"
+API_BASE_URL="https://hawking.computing.dcu.ie/api"
 COOKIE_FILE="$HOME/.hawking_cookie"
 USER_FILE="$HOME/.hawking_user"
 CACHE_FILE="$HOME/.hawking_history"
@@ -26,7 +27,6 @@ config_value() {
     local key="$1"
     local default_value="$2"
     local value=""
-
     if [ -f "$CONFIG_FILE" ]; then
         value=$(awk -v wanted="$key" '
             /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
@@ -56,6 +56,7 @@ expand_config_path() {
 }
 
 BASE_URL=$(config_value 'server.base_url' "$BASE_URL")
+API_BASE_URL=$(config_value 'api.base_url' "$API_BASE_URL")
 UPDATE_REPO_URL=$(config_value 'update.repository' "$UPDATE_REPO_URL")
 UPDATE_BRANCH=$(config_value 'update.branch' "$UPDATE_BRANCH")
 UPDATE_CHECK_INTERVAL=$(config_value 'update.check_interval_seconds' "$UPDATE_CHECK_INTERVAL")
@@ -201,6 +202,13 @@ fi
 
 # ---- Handle --logout ----
 if [ "$LOGOUT" = true ]; then
+    LOGOUT_USERNAME=""
+    [ -f "$USER_FILE" ] && LOGOUT_USERNAME=$(tr -d '[:space:]' < "$USER_FILE")
+    if [ -n "$LOGOUT_USERNAME" ] && [[ "$OSTYPE" == darwin* ]]; then
+        security delete-generic-password -s hawking -a "$LOGOUT_USERNAME" >/dev/null 2>&1 || true
+    elif [ -n "$LOGOUT_USERNAME" ] && command -v secret-tool >/dev/null 2>&1; then
+        secret-tool clear service hawking username "$LOGOUT_USERNAME" >/dev/null 2>&1 || true
+    fi
     rm -f "$COOKIE_FILE" "$USER_FILE"
     echo -e "${GREEN}Successfully ${BOLD}logged out${RESET}${GREEN} and cleared default username.${RESET}"
     exit 0
@@ -276,7 +284,81 @@ save_cached_id() {
     mv "$temp_file" "$CACHE_FILE"
 }
 
-# ---- Connection & Cookie TTL Checks ----
+API_USERNAME=""
+API_PASSWORD=""
+API_AUTHENTICATED=false
+
+api_get() {
+    curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" -u "$API_USERNAME:$API_PASSWORD" "$1"
+}
+
+authenticate_api() {
+    if [ -f "$USER_FILE" ]; then
+        API_USERNAME=$(tr -d '[:space:]' < "$USER_FILE")
+    fi
+    API_USERNAME="${API_USERNAME:-${HAWKING_USERNAME:-${EINSTEIN_USERNAME:-${DCU_USERNAME:-${SOC_USERNAME:-}}}}}"
+    if [ -z "$API_USERNAME" ]; then
+        read -rp "Username: " API_USERNAME
+    fi
+    [ -n "$API_USERNAME" ] || return 1
+
+    if [[ "$OSTYPE" == darwin* ]]; then
+        API_PASSWORD=$(security find-generic-password -s hawking -a "$API_USERNAME" -w 2>/dev/null || true)
+    elif command -v secret-tool >/dev/null 2>&1; then
+        API_PASSWORD=$(secret-tool lookup service hawking username "$API_USERNAME" 2>/dev/null || true)
+    fi
+    if [ -z "$API_PASSWORD" ]; then
+        read -srp "Password: " API_PASSWORD
+        printf '\n'
+        if [[ "$OSTYPE" == darwin* ]]; then
+            security add-generic-password -U -s hawking -a "$API_USERNAME" -w "$API_PASSWORD" 2>/dev/null || true
+        elif command -v secret-tool >/dev/null 2>&1; then
+            printf '%s' "$API_PASSWORD" | secret-tool store --label='Hawking CLI' service hawking username "$API_USERNAME" 2>/dev/null || true
+        fi
+    fi
+    [ -n "$API_PASSWORD" ] || return 1
+
+    if ! API_AUTH_RESPONSE=$(api_get "$API_BASE_URL/auth"); then
+        return 1
+    fi
+    if ! echo "$API_AUTH_RESPONSE" | jq -e '.user' >/dev/null 2>&1; then
+        return 1
+    fi
+
+    printf '%s\n' "$API_USERNAME" > "$USER_FILE"
+    chmod 600 "$USER_FILE"
+    API_AUTHENTICATED=true
+}
+
+resolve_module_for_file() {
+    local filename="$1"
+    local modules_json
+    local module_count
+    local selected_index=0
+
+    modules_json=$(api_get "$API_BASE_URL/moduleForTask/$filename" 2>/dev/null || true)
+    module_count=$(printf '%s' "$modules_json" | jq 'length' 2>/dev/null || printf '0')
+    if [ "$module_count" -eq 0 ]; then
+        return 1
+    fi
+    if [ "$module_count" -gt 1 ]; then
+        if [ -n "$ASSIGNMENT_ID" ]; then
+            selected_index=$(printf '%s' "$modules_json" | jq --arg id "$ASSIGNMENT_ID" 'to_entries | map(select((.value.id | tostring) == $id)) | .[0].key // 0')
+        else
+            printf '%s\n' "Multiple modules found for $filename:" >&2
+            printf '%s\n' "$modules_json" | jq -r '.[] | "  \(.id): \(.banner // .legacy // "unknown")"' >&2
+            read -rp "Module ID: " ASSIGNMENT_ID
+            selected_index=$(printf '%s' "$modules_json" | jq --arg id "$ASSIGNMENT_ID" 'to_entries | map(select((.value.id | tostring) == $id)) | .[0].key // -1')
+            [ "$selected_index" -ge 0 ] || return 1
+        fi
+    fi
+
+    CURRENT_ASSIGNMENT_ID=$(printf '%s' "$modules_json" | jq -r ".[$selected_index].id")
+    MODULE_CODE=$(printf '%s' "$modules_json" | jq -r ".[$selected_index].banner // .[$selected_index].legacy // \"unknown\"")
+    save_cached_id "$CURRENT_ASSIGNMENT_ID"
+}
+
+# ---- Legacy web-session helpers retained for compatibility ----
 check_hawking_connection() {
     if ! curl -s --head --connect-timeout "$HEALTHCHECK_TIMEOUT" "$BASE_URL" >/dev/null 2>&1; then
         echo -e "${RED}Error: ${BOLD}Cannot connect to Hawking${RESET}${RED}. The server may be down or unreachable.${RESET}"
@@ -333,33 +415,35 @@ prompt_for_cookie() {
 execute_upload() {
     local target_id="$1"
     local file_to_upload="$2"
-    local url="${BASE_URL}/${target_id}/fileUpload"
-    local page_url="${BASE_URL}/${target_id}"
+    local api_response
+    api_response=$(curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" \
+        -u "$API_USERNAME:$API_PASSWORD" \
+        -F "file=@${file_to_upload}" \
+        "$API_BASE_URL/upload/${target_id}/$(basename "$file_to_upload")" 2>/dev/null) || return 1
 
-    PAGE_HTML=$(curl -s -L --connect-timeout "$CONNECT_TIMEOUT" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$page_url")
-    MODULE_CODE=$(printf '%s' "$PAGE_HTML" | sed -nE 's/.*id="sidebarCourse">[[:space:]]*([^<[:space:]]+).*/\1/p' | head -n 1)
-    MODULE_CODE="${MODULE_CODE:-unknown}"
-    printf '%s' "$MODULE_CODE" > "$MODULE_CODE_FILE"
-    
-    CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
-    if [ -z "$CSRF_TOKEN" ]; then
-        CSRF_TOKEN=$(echo "$PAGE_HTML" | grep -oE 'data-csrf-token="[^"]*"' | sed -E 's/.*data-csrf-token="[^"]*"//' || true)
-    fi
-
-    CURL_CMD=(curl -s --connect-timeout "$CONNECT_TIMEOUT" -w "\n%{http_code}" -X POST "$url"
-      -b "$COOKIE_FILE"
-      -c "$COOKIE_FILE"
-      -H "X-Requested-With: XMLHttpRequest"
-      -H "Referer: ${page_url}"
-    -H "Origin: $(config_value 'server.origin' 'https://hawking.computing.dcu.ie')"
-      -H "Accept: application/json, text/javascript, */*; q=0.01"
-      -F "file=@${file_to_upload}")
-
-    if [ -n "$CSRF_TOKEN" ]; then
-        CURL_CMD+=(-F "_csrf_token=${CSRF_TOKEN}")
-    fi
-
-    "${CURL_CMD[@]}"
+    printf '%s' "$api_response" | jq -c --arg authenticated_user "$API_USERNAME" '
+        .output as $output |
+        ($output.tests // []) as $tests |
+        ($output.results // []) as $results |
+        {
+            attempt: ($output.attempt + {
+                submitterUsername: ($output.attempt.submitterUsername // $authenticated_user),
+                testResults: [
+                    range(0; ($results | length)) as $i |
+                    ($results[$i] + {
+                        testId: ($tests[$i].testId // $i),
+                        execTimeMillis: ($results[$i].execTimeMillis // $results[$i].execTime // 0),
+                        testResultMessage: ($results[$i].testResultMessage // $results[$i].message // "")
+                    })
+                ]
+            }),
+            tests: (reduce range(0; ($tests | length)) as $i
+                ({}; .[($tests[$i].testId // $i | tostring)] = ($tests[$i] + {
+                    testId: ($tests[$i].testId // $i),
+                    testStdout: ($tests[$i].testStdout // $tests[$i].expectedStdout // "" | @base64)
+                })))
+        }
+    '
 }
 
 is_valid_attempt() {
@@ -405,8 +489,10 @@ if [ ${#FILES[@]} -gt 0 ]; then
         done
         [ "$ignored" = true ] || valid_files+=("$f")
     done
-    FILES=("${valid_files[@]}")
-    if [ ${#FILES[@]} -eq 0 ]; then
+    if [ ${#valid_files[@]} -gt 0 ]; then
+        FILES=("${valid_files[@]}")
+    else
+        FILES=()
         echo -e "${RED}No ${BOLD}suitable files found${RESET}${RED} to upload.${RESET}"
         exit 1
     fi
@@ -414,12 +500,6 @@ fi
 
 if [ -z "$ASSIGNMENT_ID" ]; then
     ASSIGNMENT_ID=$(get_cached_ids | head -n 1 || true)
-    if [ -z "$ASSIGNMENT_ID" ]; then
-        echo -e "${RED}Error: ${BOLD}No module ID specified${RESET}${RED} and no cache history found.${RESET}"
-        echo -e "${YELLOW}Guidance:${RESET} Run ${BOLD}hawking-login${RESET} to auto-sync, or add manually using:"
-        echo -e "  ${BOLD}$SCRIPT_NAME --add-module <YOUR_MODULE_ID>${RESET}"
-        exit 1
-    fi
 fi
 
 if ! command -v jq &> /dev/null; then
@@ -458,12 +538,9 @@ else
     fi
 fi
 
-check_hawking_connection
-if [ ! -f "$COOKIE_FILE" ] || is_cookie_expired; then
-    prompt_for_cookie
-elif ! is_cookie_valid; then
-    rm -f "$COOKIE_FILE"
-    prompt_for_cookie
+if ! authenticate_api; then
+    echo -e "${RED}Error: ${BOLD}API authentication failed${RESET}${RED}.${RESET}"
+    exit 1
 fi
 
 if [ "$IS_MULTI" = false ] && [ "$VOCAL" = true ]; then
@@ -571,70 +648,30 @@ for FILE in "${FILES[@]}"; do
     [ -f "$FILE" ] || continue
     [ "$FILE" == "$SCRIPT_NAME" ] && continue
 
+    if ! resolve_module_for_file "$(basename "$FILE")"; then
+        if [ "$IS_MULTI" = true ]; then
+            MULTIFILE_STATUS="✗ ${FILE} — FAILED (Rejected)"
+            printf "${CYAN}│${RESET} ${RED}${BOLD}%s${RESET}%*s ${CYAN}│${RESET}\n" "$MULTIFILE_STATUS" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
+        else
+            echo -e "${RED}No module found for ${BOLD}$(basename "$FILE")${RESET}"
+        fi
+        continue
+    fi
+
     if [ "$IS_MULTI" = false ] && [ "$VOCAL" = true ]; then
         echo -e "${YELLOW}Uploading ${BOLD}${FILE}${RESET}${YELLOW} to assignment ${BOLD}${ASSIGNMENT_ID}${RESET}${YELLOW}...${RESET}"
     fi
 
-    RAW_RESPONSE=$(execute_upload "$ASSIGNMENT_ID" "$FILE")
-    MODULE_CODE=$(cat "$MODULE_CODE_FILE")
-    HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
-    RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
+    RESPONSE=$(execute_upload "$CURRENT_ASSIGNMENT_ID" "$FILE" || true)
 
-    CURRENT_ASSIGNMENT_ID="$ASSIGNMENT_ID"
-    if ! is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
-        if [ "$HTTP_CODE" -eq 401 ] || [ "$HTTP_CODE" -eq 403 ] || [ "$HTTP_CODE" -eq 302 ] || [ "$HTTP_CODE" -eq 301 ] || echo "$RESPONSE" | grep -qE '_username|login|Unauthorized|<html'; then
-            if [ "$VOCAL" = true ]; then
-                echo -e "${RED}Session expired or ${BOLD}invalid${RESET}${RED}. Re-authenticating...${RESET}"
-            fi
-            check_hawking_connection
-            prompt_for_cookie
-            if [ "$VOCAL" = true ]; then
-                echo -e "${YELLOW}Retrying upload with ${BOLD}fresh session${RESET}${YELLOW}...${RESET}"
-            fi
-            RAW_RESPONSE=$(execute_upload "$CURRENT_ASSIGNMENT_ID" "$FILE")
-            MODULE_CODE=$(cat "$MODULE_CODE_FILE")
-            HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
-            RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
+    if [ -z "$RESPONSE" ] || ! echo "$RESPONSE" | jq -e '.attempt' >/dev/null 2>&1; then
+        if [ "$IS_MULTI" = true ]; then
+            MULTIFILE_STATUS="✗ ${FILE} — FAILED (Rejected)"
+            printf "${CYAN}│${RESET} ${RED}${BOLD}%s${RESET}%*s ${CYAN}│${RESET}\n" "$MULTIFILE_STATUS" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
+        else
+            echo -e "${RED}Upload failed for ${BOLD}${FILE}${RESET}"
         fi
-
-        if ! is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
-            if [ "$VOCAL" = true ]; then
-                    echo -e "${YELLOW}Assignment ID '${CURRENT_ASSIGNMENT_ID}' rejected upload. ${BOLD}Cycling through${RESET}${YELLOW} history...${RESET}"
-            fi
-            FOUND_WORKING_ID=false
-            
-            while read -r cached_id; do
-                [ -z "$cached_id" ] && continue
-                [ "$cached_id" == "$CURRENT_ASSIGNMENT_ID" ] && continue
-                
-                if [ "$VOCAL" = true ]; then
-                    echo -e "${YELLOW}Testing history ID: ${BOLD}${cached_id}${RESET}...${RESET}"
-                fi
-                RAW_RESPONSE=$(execute_upload "$cached_id" "$FILE")
-                MODULE_CODE=$(cat "$MODULE_CODE_FILE")
-                HTTP_CODE=$(echo "$RAW_RESPONSE" | tail -n 1)
-                RESPONSE=$(echo "$RAW_RESPONSE" | sed '$d')
-                
-                if is_valid_attempt "$HTTP_CODE" "$RESPONSE"; then
-                    CURRENT_ASSIGNMENT_ID="$cached_id"
-                    FOUND_WORKING_ID=true
-                    if [ "$VOCAL" = true ]; then
-                        echo -e "${GREEN}Successfully ${BOLD}switched to cached ID${RESET}${GREEN}: ${BOLD}${CURRENT_ASSIGNMENT_ID}${RESET}"
-                    fi
-                    break
-                fi
-            done < <(get_cached_ids)
-
-            if [ "$FOUND_WORKING_ID" = false ]; then
-                if [ "$IS_MULTI" = true ]; then
-                    MULTIFILE_STATUS="✗ ${FILE} — FAILED (Rejected)"
-                    printf "${CYAN}│${RESET} ${RED}${BOLD}%s${RESET}%*s ${CYAN}│${RESET}\n" "$MULTIFILE_STATUS" "$((MULTIFILE_WIDTH - ${#MULTIFILE_STATUS} - 2))" ""
-                else
-                    echo -e "${RED}All ${BOLD}cached assignment IDs failed${RESET}${RED} or rejected file: ${BOLD}${FILE}${RESET}"
-                fi
-                continue
-            fi
-        fi
+        continue
     fi
 
     save_cached_id "$CURRENT_ASSIGNMENT_ID"

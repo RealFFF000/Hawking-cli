@@ -1,3 +1,4 @@
 *.py
 *.c
 tests/*
+hawkingCLI.py
