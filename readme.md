@@ -17,7 +17,7 @@ Runtime assumptions are stored in [`config.yaml`](config.yaml). It controls the 
 ## Features
 
 * **Official API transport:** Uses Basic Auth with `/api/auth`, `/api/moduleForTask/{filename}`, and `/api/upload/{module_id}/{filename}`.
-* **Secure credential storage:** Uses macOS Keychain or `secret-tool` when available, and prompts for a password otherwise.
+* **Secure credential storage:** Uses macOS Keychain or `secret-tool` when available. If neither is available, asks for explicit confirmation before saving the password in plaintext to `~/.hawking_pw` (`chmod 600`); otherwise prompts for a password each time.
 * **Module Resolution:** Resolves the correct module from the submitted filename through the API; cached module IDs are retained as a convenience.
 * **Auto-File Detection:** Picks the **most recently modified suitable file** when no file is specified. It ignores hidden files, extensionless files, the CLI script, and configured extensions such as `.out`.
 * **Visual Diffing:** Prints character-level differences in red and explicitly shows missing final newlines as `<newline>`.

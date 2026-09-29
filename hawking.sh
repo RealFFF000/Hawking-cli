@@ -64,6 +64,7 @@ UPDATE_CHECK_FILE=$(expand_config_path "$(config_value 'update.check_file' "$UPD
 COOKIE_FILE=$(expand_config_path "$(config_value 'session.cookie_file' "$COOKIE_FILE")")
 USER_FILE=$(expand_config_path "$(config_value 'session.user_file' "$USER_FILE")")
 CACHE_FILE=$(expand_config_path "$(config_value 'session.cache_file' "$CACHE_FILE")")
+PASSWORD_FILE=$(expand_config_path "$(config_value 'session.password_file' "$HOME/.hawking_pw")")
 COOKIE_TTL=$(config_value 'session.cookie_ttl_seconds' "$COOKIE_TTL")
 CONNECT_TIMEOUT=$(config_value 'network.connect_timeout_seconds' "$CONNECT_TIMEOUT")
 HEALTHCHECK_TIMEOUT=$(config_value 'network.healthcheck_timeout_seconds' "$HEALTHCHECK_TIMEOUT")
@@ -208,6 +209,8 @@ if [ "$LOGOUT" = true ]; then
         security delete-generic-password -s hawking -a "$LOGOUT_USERNAME" >/dev/null 2>&1 || true
     elif [ -n "$LOGOUT_USERNAME" ] && command -v secret-tool >/dev/null 2>&1; then
         secret-tool clear service hawking username "$LOGOUT_USERNAME" >/dev/null 2>&1 || true
+    elif [ -n "$LOGOUT_USERNAME" ]; then
+        rm -f "$PASSWORD_FILE"
     fi
     rm -f "$COOKIE_FILE" "$USER_FILE"
     echo -e "${GREEN}Successfully ${BOLD}logged out${RESET}${GREEN} and cleared default username.${RESET}"
@@ -306,6 +309,8 @@ authenticate_api() {
         API_PASSWORD=$(security find-generic-password -s hawking -a "$API_USERNAME" -w 2>/dev/null || true)
     elif command -v secret-tool >/dev/null 2>&1; then
         API_PASSWORD=$(secret-tool lookup service hawking username "$API_USERNAME" 2>/dev/null || true)
+    elif [ -f "$PASSWORD_FILE" ]; then
+        API_PASSWORD=$(cat "$PASSWORD_FILE" 2>/dev/null || true)
     fi
     if [ -z "$API_PASSWORD" ]; then
         read -srp "Password: " API_PASSWORD
@@ -314,6 +319,11 @@ authenticate_api() {
             security add-generic-password -U -s hawking -a "$API_USERNAME" -w "$API_PASSWORD" 2>/dev/null || true
         elif command -v secret-tool >/dev/null 2>&1; then
             printf '%s' "$API_PASSWORD" | secret-tool store --label='Hawking CLI' service hawking username "$API_USERNAME" 2>/dev/null || true
+        else
+            read -rp "No system keychain available. Save password in plaintext at ${PASSWORD_FILE}? [y/N] " save_plaintext
+            if [[ "$save_plaintext" =~ ^[Yy]$ ]]; then
+                ( umask 077; printf '%s' "$API_PASSWORD" > "$PASSWORD_FILE" ) 2>/dev/null || true
+            fi
         fi
     fi
     [ -n "$API_PASSWORD" ] || return 1

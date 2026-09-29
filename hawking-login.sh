@@ -49,6 +49,7 @@ LOGIN_URL=$(config_value 'server.login_url' "$LOGIN_URL")
 COOKIE_FILE=$(expand_config_path "$(config_value 'session.cookie_file' "$COOKIE_FILE")")
 USER_FILE=$(expand_config_path "$(config_value 'session.user_file' "$USER_FILE")")
 CACHE_FILE=$(expand_config_path "$(config_value 'session.cache_file' "$CACHE_FILE")")
+PASSWORD_FILE=$(expand_config_path "$(config_value 'session.password_file' "$HOME/.hawking_pw")")
 CONNECT_TIMEOUT=$(config_value 'network.connect_timeout_seconds' 5)
 HEADER_FILE=$(mktemp)
 COOKIE_JAR=$(mktemp)
@@ -98,6 +99,8 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     PASSWORD=$(security find-generic-password -s "hawking" -a "$USERNAME" -w 2>/dev/null || true)
 elif command -v secret-tool &> /dev/null; then
     PASSWORD=$(secret-tool lookup service hawking username "$USERNAME" 2>/dev/null || true)
+elif [ -f "$PASSWORD_FILE" ]; then
+    PASSWORD=$(cat "$PASSWORD_FILE" 2>/dev/null || true)
 fi
 
 if [ -z "$PASSWORD" ]; then
@@ -162,6 +165,11 @@ if [ "$PROMPTED_PASSWORD" = true ]; then
         security add-generic-password -U -s "hawking" -a "$USERNAME" -w "$PASSWORD" 2>/dev/null || true
     elif command -v secret-tool &> /dev/null; then
         echo "$PASSWORD" | secret-tool store --label='Hawking CLI' service hawking username "$USERNAME" 2>/dev/null || true
+    else
+        read -rp "No system keychain available. Save password in plaintext at ${PASSWORD_FILE}? [y/N] " SAVE_PLAINTEXT
+        if [[ "$SAVE_PLAINTEXT" =~ ^[Yy]$ ]]; then
+            ( umask 077; printf '%s' "$PASSWORD" > "$PASSWORD_FILE" ) 2>/dev/null || true
+        fi
     fi
 fi
 
