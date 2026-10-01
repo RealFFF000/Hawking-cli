@@ -3,6 +3,8 @@
 set -euo pipefail
 
 BASE_URL="https://hawking.computing.dcu.ie/hawking"
+LOGIN_URL="https://hawking.computing.dcu.ie/login"
+SERVER_ORIGIN="https://hawking.computing.dcu.ie"
 API_BASE_URL="https://hawking.computing.dcu.ie/api"
 COOKIE_FILE="$HOME/.hawking_cookie"
 USER_FILE="$HOME/.hawking_user"
@@ -10,10 +12,11 @@ CACHE_FILE="$HOME/.hawking_history"
 UPDATE_CHECK_FILE="$HOME/.hawking_last_update"
 UPDATE_REPO_URL="https://github.com/RealFFF000/Hawking-cli"
 UPDATE_BRANCH="main"
+UPDATE_ENABLED=true
 UPDATE_CHECK_INTERVAL=604800
 COOKIE_TTL=7200
 CONNECT_TIMEOUT=5
-HEALTHCHECK_TIMEOUT=4
+MAX_TIME=60
 IGNORE_EXTENSIONS=".out"
 IGNORE_HIDDEN=true
 IGNORE_SCRIPT="hawking.sh"
@@ -56,18 +59,20 @@ expand_config_path() {
 }
 
 BASE_URL=$(config_value 'server.base_url' "$BASE_URL")
+LOGIN_URL=$(config_value 'server.login_url' "$LOGIN_URL")
+SERVER_ORIGIN=$(config_value 'server.origin' "$SERVER_ORIGIN")
 API_BASE_URL=$(config_value 'api.base_url' "$API_BASE_URL")
 UPDATE_REPO_URL=$(config_value 'update.repository' "$UPDATE_REPO_URL")
 UPDATE_BRANCH=$(config_value 'update.branch' "$UPDATE_BRANCH")
+UPDATE_ENABLED=$(config_value 'update.enabled' "$UPDATE_ENABLED")
 UPDATE_CHECK_INTERVAL=$(config_value 'update.check_interval_seconds' "$UPDATE_CHECK_INTERVAL")
 UPDATE_CHECK_FILE=$(expand_config_path "$(config_value 'update.check_file' "$UPDATE_CHECK_FILE")")
 COOKIE_FILE=$(expand_config_path "$(config_value 'session.cookie_file' "$COOKIE_FILE")")
 USER_FILE=$(expand_config_path "$(config_value 'session.user_file' "$USER_FILE")")
 CACHE_FILE=$(expand_config_path "$(config_value 'session.cache_file' "$CACHE_FILE")")
-PASSWORD_FILE=$(expand_config_path "$(config_value 'session.password_file' "$HOME/.hawking_pw")")
 COOKIE_TTL=$(config_value 'session.cookie_ttl_seconds' "$COOKIE_TTL")
 CONNECT_TIMEOUT=$(config_value 'network.connect_timeout_seconds' "$CONNECT_TIMEOUT")
-HEALTHCHECK_TIMEOUT=$(config_value 'network.healthcheck_timeout_seconds' "$HEALTHCHECK_TIMEOUT")
+MAX_TIME=$(config_value 'network.max_time_seconds' "$MAX_TIME")
 IGNORE_EXTENSIONS=$(config_value 'file_selection.ignore_extensions' "$IGNORE_EXTENSIONS")
 IGNORE_HIDDEN=$(config_value 'file_selection.ignore_hidden' "$IGNORE_HIDDEN")
 IGNORE_SCRIPT=$(config_value 'file_selection.ignore_script' "$IGNORE_SCRIPT")
@@ -264,7 +269,7 @@ else
     fi
 fi
 
-if [ "$should_check" = true ]; then
+if [ "$UPDATE_ENABLED" = true ] && [ "$should_check" = true ]; then
     update_installed_cli || true
     echo "$now" > "$UPDATE_CHECK_FILE"
 fi
@@ -289,10 +294,108 @@ save_cached_id() {
 
 API_USERNAME=""
 API_PASSWORD=""
-API_AUTHENTICATED=false
 
 api_get() {
-    curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" -u "$API_USERNAME:$API_PASSWORD" "$1"
+    curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" -u "$API_USERNAME:$API_PASSWORD" "$1"
+}
+
+url_encode() {
+    printf '%s' "$1" | jq -sRr @uri
+}
+
+fetch_legacy_runner_response() {
+    local target_id="$1"
+    local file_to_upload="$2"
+    local cookie_jar
+    local header_file
+    local login_page
+    local csrf_token
+    local login_status
+    local login_location
+    local page_html
+    local upload_url
+
+    cookie_jar=$(mktemp)
+    header_file=$(mktemp)
+    login_page=$(curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -c "$cookie_jar" -b "$cookie_jar" "$LOGIN_URL") || {
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    }
+    csrf_token=$(printf '%s' "$login_page" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
+    [ -n "$csrf_token" ] || {
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    }
+
+    curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -D "$header_file" -b "$cookie_jar" -c "$cookie_jar" -X POST "$LOGIN_URL" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -H "Referer: $LOGIN_URL" \
+        -H "Origin: $SERVER_ORIGIN" \
+        --data-urlencode "_username=${API_USERNAME}" \
+        --data-urlencode "_password=${API_PASSWORD}" \
+        --data-urlencode "_csrf_token=${csrf_token}" >/dev/null || {
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    }
+
+    login_status=$(head -n 1 "$header_file" | awk '{print $2}')
+    login_location=$(grep -i '^Location:' "$header_file" | awk '{print $2}' | tr -d '\r\n' || true)
+    if [ "$login_status" != 302 ] && [ "$login_status" != 303 ]; then
+        [ "$DEBUG" = true ] && printf 'legacy runner: login status %s\n' "$login_status" >&2
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    fi
+    if echo "$login_location" | grep -qE 'login\?error|/login$'; then
+        [ "$DEBUG" = true ] && printf 'legacy runner: login rejected (%s)\n' "$login_location" >&2
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    fi
+
+    local auth_session
+    auth_session=$(grep -i 'Set-Cookie: PHPSESSID=' "$header_file" | sed -E 's/.*PHPSESSID=([^;]+).*/\1/' | tail -n 1 | tr -d '\r\n' || true)
+    if [ -z "$auth_session" ]; then
+        [ "$DEBUG" = true ] && printf '%s\n' 'legacy runner: no PHPSESSID' >&2
+        auth_session=$(grep 'PHPSESSID' "$cookie_jar" | grep -v deleted | tail -n 1 | awk '{print $7}' | tr -d '\r\n' || true)
+    fi
+    if [ -z "$auth_session" ]; then
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    fi
+    printf '# Netscape HTTP Cookie File\nhawking.computing.dcu.ie\tFALSE\t/\tTRUE\t0\tPHPSESSID\t%s\n' "$auth_session" > "$cookie_jar"
+
+    if [[ "$login_location" != http* ]]; then
+        login_location="https://hawking.computing.dcu.ie${login_location}"
+    fi
+    curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -L -b "$cookie_jar" -c "$cookie_jar" "$login_location" >/dev/null || {
+        [ "$DEBUG" = true ] && printf '%s\n' 'legacy runner: post-login redirect failed' >&2
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    }
+
+    page_html=$(curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -b "$cookie_jar" -c "$cookie_jar" "$BASE_URL/$target_id") || {
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    }
+    csrf_token=$(printf '%s' "$page_html" | grep -oE 'name="(_csrf_token|csrf_token)"[^>]*value="[^"]*"' | sed -E 's/.*value="([^"]*)".*/\1/' || true)
+
+    upload_url="$BASE_URL/$target_id/fileUpload"
+    local legacy_response
+    local upload_args=(-F "file=@${file_to_upload}")
+    [ -n "$csrf_token" ] && upload_args+=(-F "_csrf_token=${csrf_token}")
+    if ! legacy_response=$(curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
+        -b "$cookie_jar" -c "$cookie_jar" -H "X-Requested-With: XMLHttpRequest" \
+        -H "Referer: $BASE_URL/$target_id" -H "Origin: $SERVER_ORIGIN" \
+        "${upload_args[@]}" "$upload_url"); then
+        [ "$DEBUG" = true ] && printf '%s\n' 'legacy runner: fileUpload failed' >&2
+        rm -f "$cookie_jar" "$header_file"
+        return 1
+    fi
+    rm -f "$cookie_jar" "$header_file"
+    printf '%s' "$legacy_response"
 }
 
 authenticate_api() {
@@ -312,6 +415,7 @@ authenticate_api() {
     elif [ -f "$PASSWORD_FILE" ]; then
         API_PASSWORD=$(cat "$PASSWORD_FILE" 2>/dev/null || true)
     fi
+    PASSWORD_FROM_PROMPT=false
     if [ -z "$API_PASSWORD" ]; then
         read -srp "Password: " API_PASSWORD
         printf '\n'
@@ -319,16 +423,16 @@ authenticate_api() {
             security add-generic-password -U -s hawking -a "$API_USERNAME" -w "$API_PASSWORD" 2>/dev/null || true
         elif command -v secret-tool >/dev/null 2>&1; then
             printf '%s' "$API_PASSWORD" | secret-tool store --label='Hawking CLI' service hawking username "$API_USERNAME" 2>/dev/null || true
-        else
-            read -rp "No system keychain available. Save password in plaintext at ${PASSWORD_FILE}? [y/N] " save_plaintext
-            if [[ "$save_plaintext" =~ ^[Yy]$ ]]; then
-                ( umask 077; printf '%s' "$API_PASSWORD" > "$PASSWORD_FILE" ) 2>/dev/null || true
-            fi
         fi
     fi
     [ -n "$API_PASSWORD" ] || return 1
 
     if ! API_AUTH_RESPONSE=$(api_get "$API_BASE_URL/auth"); then
+        if [[ "$OSTYPE" == darwin* ]]; then
+            security delete-generic-password -s hawking -a "$API_USERNAME" >/dev/null 2>&1 || true
+        elif command -v secret-tool >/dev/null 2>&1; then
+            secret-tool clear service hawking username "$API_USERNAME" >/dev/null 2>&1 || true
+        fi
         return 1
     fi
     if ! echo "$API_AUTH_RESPONSE" | jq -e '.user' >/dev/null 2>&1; then
@@ -337,7 +441,13 @@ authenticate_api() {
 
     printf '%s\n' "$API_USERNAME" > "$USER_FILE"
     chmod 600 "$USER_FILE"
-    API_AUTHENTICATED=true
+    if [ "$PASSWORD_FROM_PROMPT" = true ]; then
+        if [[ "$OSTYPE" == darwin* ]]; then
+            security add-generic-password -U -s hawking -a "$API_USERNAME" -w "$API_PASSWORD" 2>/dev/null || true
+        elif command -v secret-tool >/dev/null 2>&1; then
+            printf '%s' "$API_PASSWORD" | secret-tool store --label='Hawking CLI' service hawking username "$API_USERNAME" 2>/dev/null || true
+        fi
+    fi
 }
 
 resolve_module_for_file() {
@@ -345,15 +455,18 @@ resolve_module_for_file() {
     local modules_json
     local module_count
     local selected_index=0
+    local encoded_filename
+    encoded_filename=$(url_encode "$filename")
 
-    modules_json=$(api_get "$API_BASE_URL/moduleForTask/$filename" 2>/dev/null || true)
+    modules_json=$(api_get "$API_BASE_URL/moduleForTask/$encoded_filename" 2>/dev/null || true)
     module_count=$(printf '%s' "$modules_json" | jq 'length' 2>/dev/null || printf '0')
     if [ "$module_count" -eq 0 ]; then
         return 1
     fi
     if [ "$module_count" -gt 1 ]; then
         if [ -n "$ASSIGNMENT_ID" ]; then
-            selected_index=$(printf '%s' "$modules_json" | jq --arg id "$ASSIGNMENT_ID" 'to_entries | map(select((.value.id | tostring) == $id)) | .[0].key // 0')
+            selected_index=$(printf '%s' "$modules_json" | jq --arg id "$ASSIGNMENT_ID" 'to_entries | map(select((.value.id | tostring) == $id)) | .[0].key // -1')
+            [ "$selected_index" -ge 0 ] || return 1
         else
             printf '%s\n' "Multiple modules found for $filename:" >&2
             printf '%s\n' "$modules_json" | jq -r '.[] | "  \(.id): \(.banner // .legacy // "unknown")"' >&2
@@ -368,75 +481,25 @@ resolve_module_for_file() {
     save_cached_id "$CURRENT_ASSIGNMENT_ID"
 }
 
-# ---- Legacy web-session helpers retained for compatibility ----
-check_hawking_connection() {
-    if ! curl -s --head --connect-timeout "$HEALTHCHECK_TIMEOUT" "$BASE_URL" >/dev/null 2>&1; then
-        echo -e "${RED}Error: ${BOLD}Cannot connect to Hawking${RESET}${RED}. The server may be down or unreachable.${RESET}"
-        exit 1
-    fi
-}
-
-is_cookie_expired() {
-    if [ ! -f "$COOKIE_FILE" ]; then
-        return 0
-    fi
-    local now_epoch
-    now_epoch=$(date +%s)
-    local mtime
-    mtime=$(stat -c %Y "$COOKIE_FILE" 2>/dev/null || stat -f %m "$COOKIE_FILE" 2>/dev/null || echo 0)
-    local age=$(( now_epoch - mtime ))
-    [ $age -gt "$COOKIE_TTL" ]
-}
-
-is_cookie_valid() {
-    local session_response
-    session_response=$(curl -s -L --connect-timeout "$CONNECT_TIMEOUT" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "$BASE_URL" || true)
-    if echo "$session_response" | grep -qE 'name="(_username|_password)"|action="[^"]*/login'; then
-        return 1
-    fi
-    return 0
-}
-
-prompt_for_cookie() {
-    check_hawking_connection
-    if [ "$VOCAL" = true ]; then
-        echo -e "${YELLOW}Session missing, expired, or invalid. ${BOLD}Triggering auto-login${RESET}${YELLOW} via hawking-login...${RESET}"
-    fi
-    
-    local login_arg=""
-    [ "$VOCAL" = true ] && login_arg="--vocal"
-
-    if command -v hawking-login &> /dev/null; then
-        hawking-login $login_arg
-    elif [ -x "$HOME/.hawking/bin/hawking-login" ]; then
-        "$HOME/.hawking/bin/hawking-login" $login_arg
-    else
-        echo -e "${RED}Error: hawking-login command ${BOLD}not found${RESET}${RED}.${RESET}"
-        exit 1
-    fi
-
-    if [ ! -f "$COOKIE_FILE" ]; then
-        echo -e "${RED}Failed to acquire ${BOLD}valid session cookie${RESET}${RED}.${RESET}"
-        exit 1
-    fi
-}
-
 # ---- Upload request function ----
 execute_upload() {
     local target_id="$1"
     local file_to_upload="$2"
     local api_response
+    local encoded_filename
+    encoded_filename=$(url_encode "$(basename "$file_to_upload")")
     api_response=$(curl -sS --fail --connect-timeout "$CONNECT_TIMEOUT" \
+        --max-time "$MAX_TIME" \
         -u "$API_USERNAME:$API_PASSWORD" \
         -F "file=@${file_to_upload}" \
-        "$API_BASE_URL/upload/${target_id}/$(basename "$file_to_upload")" 2>/dev/null) || return 1
+        "$API_BASE_URL/upload/${target_id}/${encoded_filename}" 2>/dev/null) || return 1
 
     printf '%s' "$api_response" | jq -c --arg authenticated_user "$API_USERNAME" '
         .output as $output |
         ($output.tests // []) as $tests |
         ($output.results // []) as $results |
         {
-            attempt: ($output.attempt + {
+            attempt: (($output.attempt | del(.runners)) + {
                 submitterUsername: ($output.attempt.submitterUsername // $authenticated_user),
                 testResults: [
                     range(0; ($results | length)) as $i |
@@ -448,21 +511,12 @@ execute_upload() {
                 ]
             }),
             tests: (reduce range(0; ($tests | length)) as $i
-                ({}; .[($tests[$i].testId // $i | tostring)] = ($tests[$i] + {
+                ({}; .[($tests[$i].testId // $i | tostring)] = (($tests[$i] | del(.runners)) + {
                     testId: ($tests[$i].testId // $i),
                     testStdout: ($tests[$i].testStdout // $tests[$i].expectedStdout // "" | @base64)
                 })))
         }
     '
-}
-
-is_valid_attempt() {
-    local code="$1"
-    local resp="$2"
-    if [ "$code" -eq 200 ] && echo "$resp" | jq -e '.attempt' >/dev/null 2>&1; then
-        return 0
-    fi
-    return 1
 }
 
 # ---- Argument Parsing with Smart Detection ----
@@ -490,13 +544,15 @@ if [ ${#FILES[@]} -gt 0 ]; then
             continue
         fi
         ignored=false
-        IFS=',' read -ra ignored_extensions <<< "$IGNORE_EXTENSIONS"
-        for extension in "${ignored_extensions[@]}"; do
-            if [[ "$filename" == *"$extension" ]]; then
-                ignored=true
-                break
-            fi
-        done
+        if [ -n "$IGNORE_EXTENSIONS" ]; then
+            IFS=',' read -ra ignored_extensions <<< "$IGNORE_EXTENSIONS"
+            for extension in "${ignored_extensions[@]}"; do
+                if [[ "$filename" == *"$extension" ]]; then
+                    ignored=true
+                    break
+                fi
+            done
+        fi
         [ "$ignored" = true ] || valid_files+=("$f")
     done
     if [ ${#valid_files[@]} -gt 0 ]; then
@@ -522,7 +578,12 @@ IS_MULTI=false
 if [ ${#FILES[@]} -eq 0 ]; then
     IGNORE_PATTERN="^(${SCRIPT_NAME}|${IGNORE_SCRIPT}|[^.]+$"
     [ "$IGNORE_HIDDEN" = true ] && IGNORE_PATTERN+="|\..*"
-    [ -n "$IGNORE_EXTENSIONS" ] && IGNORE_PATTERN+="|.*${IGNORE_EXTENSIONS//,/|}$"
+    if [ -n "$IGNORE_EXTENSIONS" ]; then
+        IFS=',' read -ra ignored_extensions <<< "$IGNORE_EXTENSIONS"
+        for extension in "${ignored_extensions[@]}"; do
+            IGNORE_PATTERN+="|.*${extension}"
+        done
+    fi
     IGNORE_PATTERN+=")$"
     NEWEST_FILE=$(ls -t 2>/dev/null | grep -v -E "$IGNORE_PATTERN" | head -n 1 || true)
     if [ -z "$NEWEST_FILE" ]; then
@@ -637,8 +698,6 @@ expand_tabs() {
     printf '%s' "$1" | LC_ALL=C expand -t 8
 }
 
-MODULE_CODE_FILE=$(mktemp)
-trap 'rm -f "$MODULE_CODE_FILE"' EXIT
 RUNNER_DIR=""
 RUNNER_FILES=()
 
@@ -691,17 +750,23 @@ for FILE in "${FILES[@]}"; do
         echo "$RESPONSE" | jq .
     fi
 
-    prepare_runner_files "$RESPONSE"
-    if [ ${#RUNNER_FILES[@]} -gt 0 ]; then
-        RUNNERS_STATUS="available"
-        RUNNERS_STATUS_COLOR="$GREEN"
-    else
-        RUNNERS_STATUS="unavailable"
-        RUNNERS_STATUS_COLOR="$BLUE"
-    fi
-
     if [ "$SHOW_RUNNER" = true ]; then
-        open_runners "$RESPONSE"
+        if [ "$DEBUG" = true ]; then
+            LEGACY_RESPONSE=$(fetch_legacy_runner_response "$CURRENT_ASSIGNMENT_ID" "$FILE" || true)
+        else
+            LEGACY_RESPONSE=$(fetch_legacy_runner_response "$CURRENT_ASSIGNMENT_ID" "$FILE" 2>/dev/null || true)
+        fi
+        if [ "$DEBUG" = true ]; then
+            echo -e "${BOLD}=== Legacy Runner Response ===${RESET}"
+            printf '%s\n' "$LEGACY_RESPONSE" | jq . 2>/dev/null || printf '%s\n' "$LEGACY_RESPONSE"
+        fi
+        if [ -n "$LEGACY_RESPONSE" ] && printf '%s' "$LEGACY_RESPONSE" | jq -e '.tests' >/dev/null 2>&1; then
+            prepare_runner_files "$LEGACY_RESPONSE"
+        else
+            RUNNER_DIR=""
+            RUNNER_FILES=()
+        fi
+        open_runners "$LEGACY_RESPONSE"
         continue
     fi
 
@@ -732,7 +797,6 @@ for FILE in "${FILES[@]}"; do
     else
         SUBMITTER_USERNAME=$(echo "$RESPONSE" | jq -r '.attempt.submitterUsername // "unknown"')
         ATTEMPT_CONTENT_WIDTH=19
-        [ $((13 + ${#RUNNERS_STATUS})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#RUNNERS_STATUS}))
         [ $((13 + ${#CURRENT_ASSIGNMENT_ID})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#CURRENT_ASSIGNMENT_ID}))
         [ $((13 + ${#MODULE_CODE})) -gt "$ATTEMPT_CONTENT_WIDTH" ] && ATTEMPT_CONTENT_WIDTH=$((13 + ${#MODULE_CODE}))
         DISPLAY_FILENAME=$(basename "$FILE")
@@ -749,7 +813,6 @@ for FILE in "${FILES[@]}"; do
         printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${BLUE}" "Filename:"
         printf '\033]8;;%s\033\\%s\033]8;;\033\\' "$FILE_URL" "$DISPLAY_FILENAME"
         printf "${RESET}%*s ${CYAN}│${RESET}\n" "$((ATTEMPT_CONTENT_WIDTH - 13 - ${#DISPLAY_FILENAME}))" ""
-        printf "${CYAN}│${RESET} ${BOLD}%-12s${RESET} ${RUNNERS_STATUS_COLOR}%-*s${RESET} ${CYAN}│${RESET}\n" "Runners:" "$((ATTEMPT_CONTENT_WIDTH - 13))" "$RUNNERS_STATUS"
         echo -e "${BOLD}${CYAN}╰$(make_rule "$((ATTEMPT_CONTENT_WIDTH + 2))")╯${RESET}"
 
                 TEST_ROWS=$(echo "$RESPONSE" | jq -r '
@@ -762,6 +825,7 @@ for FILE in "${FILES[@]}"; do
                         (.correct | tostring),
                         (.execTimeMillis | tostring),
                         (("x" + ($tdef.testStdout // "")) | @base64),
+                        (("x" + (($tdef.args // "") | @base64d)) | @base64),
                         (("x" + (.stdout // "")) | @base64),
                         (("x" + (.stderr // "")) | @base64),
                         (("x" + (.testResultMessage // "")) | @base64)
@@ -773,6 +837,7 @@ for FILE in "${FILES[@]}"; do
                     .attempt.testResults[] as $result |
                     ($tests[$result.testId | tostring] // {}) as $test |
                     ($test.testStdout // "" | if . == "" then "" else @base64d end) as $expected |
+                    (($test.args // "") | @base64d) as $arguments |
                     ($result.stdout // "") as $stdout |
                     ($result.stderr // "") as $stderr |
                     ($result.testResultMessage // "") as $message |
@@ -782,6 +847,7 @@ for FILE in "${FILES[@]}"; do
                         ("x FAILED - test " + ($result.testId | tostring) + " (" + ($result.execTimeMillis | tostring) + "ms)"),
                         "  Expected:",
                         "  Actual:  ",
+                        ($arguments | if . == "" then "" else detail end),
                         ($expected | detail),
                         ($actual | detail),
                         (if $stderr == "" then "" else ($stderr | detail) end)
@@ -804,7 +870,7 @@ for FILE in "${FILES[@]}"; do
         TOTAL_TESTS=0
         PREVIOUS_TEST_HAD_DETAILS=false
 
-        while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 STDOUT_B64 STDERR_B64 RESULT_MESSAGE_B64; do
+        while IFS=$'\t' read -r TEST_ID CORRECT EXEC_TIME EXPECTED_B64 ARGUMENTS_B64 STDOUT_B64 STDERR_B64 RESULT_MESSAGE_B64; do
             if [ "$PREVIOUS_TEST_HAD_DETAILS" = true ]; then
                 printf "${TEST_BORDER_COLOR}│${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH + 2))" ""
             fi
@@ -818,6 +884,8 @@ for FILE in "${FILES[@]}"; do
             EXPECTED=${EXPECTED%$'\001'}
             EXPECTED=$(expand_tabs "$EXPECTED"; printf '\001')
             EXPECTED=${EXPECTED%$'\001'}
+            ARGUMENTS=$(decode_field "$ARGUMENTS_B64"; printf '\001')
+            ARGUMENTS=${ARGUMENTS%$'\001'}
             RESULT_MESSAGE=$(expand_tabs "$(decode_field "$RESULT_MESSAGE_B64")"; printf '\001')
             RESULT_MESSAGE=${RESULT_MESSAGE%$'\001'}
 
@@ -829,6 +897,12 @@ for FILE in "${FILES[@]}"; do
                 ALL_PASSED=false
                 TEST_STATUS="✗ FAILED — test ${TEST_ID} (${EXEC_TIME}ms)"
                 printf "${TEST_BORDER_COLOR}│${RESET} ${RED}${BOLD}%s${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$TEST_STATUS" "$((TEST_CONTENT_WIDTH - ${#TEST_STATUS} + 1))" ""
+
+                if [ -n "$ARGUMENTS" ]; then
+                    TEST_HAD_DETAILS=true
+                    printf "${TEST_BORDER_COLOR}│${RESET}  ${BOLD}Arguments:${RESET}%*s${TEST_BORDER_COLOR}│${RESET}\n" "$((TEST_CONTENT_WIDTH - 10))" ""
+                    printf '%s\n' "$ARGUMENTS" | awk -v width="$TEST_CONTENT_WIDTH" -v border="${TEST_BORDER_COLOR}" -v white="${WHITE}" -v reset="${RESET}" '{ line = "    | " $0; plain_line = line; gsub(/[‘’]/, "x", plain_line); padding = width - length(plain_line); if (padding < 0) padding = 0; printf "%s│%s     %s|%s %s%s %s│%s\n", border, reset, white, reset, $0, sprintf("%*s", padding, ""), border, reset }'
+                fi
                 
                 ACT_CLEAN=$(printf '%s' "$STDOUT" | tr -d '\r'; printf '\001')
                 ACT_CLEAN=${ACT_CLEAN%$'\001'}
